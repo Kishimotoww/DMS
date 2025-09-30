@@ -19,35 +19,54 @@ st.set_page_config(
     layout="wide"
 )
 
-# Проверяем и настраиваем Tesseract
+# Автоматическая установка Tesseract
+@st.cache_resource
 def setup_tesseract():
-    """Настройка Tesseract для Streamlit Cloud"""
+    """Автоматическая установка и настройка Tesseract"""
     try:
-        # Пробуем найти tesseract в системе
+        # Пробуем найти tesseract
         result = subprocess.run(['which', 'tesseract'], capture_output=True, text=True)
         if result.returncode == 0:
             tesseract_path = result.stdout.strip()
             pytesseract.pytesseract.tesseract_cmd = tesseract_path
             st.success(f"✅ Tesseract найден: {tesseract_path}")
             return True
-        else:
-            # Пробуем установить
-            st.warning("🔄 Tesseract не найден, пробуем установить...")
-            install_result = subprocess.run([
-                'apt-get', 'update', '&&', 
-                'apt-get', 'install', '-y', 'tesseract-ocr', 'tesseract-ocr-eng'
-            ], shell=True, capture_output=True, text=True)
-            
-            if install_result.returncode == 0:
-                st.success("✅ Tesseract успешно установлен!")
+    except:
+        pass
+    
+    # Если не найден - пробуем установить
+    try:
+        st.info("🔄 Установка Tesseract OCR...")
+        install_cmd = """
+        apt-get update && \
+        apt-get install -y tesseract-ocr tesseract-ocr-eng && \
+        tesseract --version
+        """
+        result = subprocess.run(install_cmd, shell=True, capture_output=True, text=True)
+        
+        if result.returncode == 0:
+            # Находим путь к установленному tesseract
+            which_result = subprocess.run(['which', 'tesseract'], capture_output=True, text=True)
+            if which_result.returncode == 0:
+                tesseract_path = which_result.stdout.strip()
+                pytesseract.pytesseract.tesseract_cmd = tesseract_path
+                st.success(f"✅ Tesseract установлен: {tesseract_path}")
                 return True
-            else:
-                st.error(f"❌ Ошибка установки Tesseract: {install_result.stderr}")
-                return False
+        else:
+            st.error(f"❌ Ошибка установки Tesseract: {result.stderr}")
+            return False
     except Exception as e:
-        st.error(f"❌ Ошибка настройки Tesseract: {e}")
+        st.error(f"❌ Ошибка: {e}")
         return False
+    
+    return False
 
+# Проверяем Tesseract при запуске
+if 'tesseract_checked' not in st.session_state:
+    st.session_state.tesseract_available = setup_tesseract()
+    st.session_state.tesseract_checked = True
+
+tesseract_available = st.session_state.tesseract_available
 # Глобальная переменная для остановки
 class StopProcessing:
     def __init__(self):
