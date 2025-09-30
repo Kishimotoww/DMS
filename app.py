@@ -1,5 +1,5 @@
 import streamlit as st
-import fitz  # PyMuPDF
+import fitz
 import pytesseract
 from PIL import Image
 import io
@@ -9,7 +9,8 @@ import os
 import zipfile
 import base64
 import time
-from datetime import datetime
+import subprocess
+import sys
 
 # Настройка страницы
 st.set_page_config(
@@ -18,7 +19,52 @@ st.set_page_config(
     layout="wide"
 )
 
-# CSS для улучшения внешнего вида
+# Проверяем и настраиваем Tesseract
+def setup_tesseract():
+    """Настройка Tesseract для Streamlit Cloud"""
+    try:
+        # Пробуем найти tesseract в системе
+        result = subprocess.run(['which', 'tesseract'], capture_output=True, text=True)
+        if result.returncode == 0:
+            tesseract_path = result.stdout.strip()
+            pytesseract.pytesseract.tesseract_cmd = tesseract_path
+            st.success(f"✅ Tesseract найден: {tesseract_path}")
+            return True
+        else:
+            # Пробуем установить
+            st.warning("🔄 Tesseract не найден, пробуем установить...")
+            install_result = subprocess.run([
+                'apt-get', 'update', '&&', 
+                'apt-get', 'install', '-y', 'tesseract-ocr', 'tesseract-ocr-eng'
+            ], shell=True, capture_output=True, text=True)
+            
+            if install_result.returncode == 0:
+                st.success("✅ Tesseract успешно установлен!")
+                return True
+            else:
+                st.error(f"❌ Ошибка установки Tesseract: {install_result.stderr}")
+                return False
+    except Exception as e:
+        st.error(f"❌ Ошибка настройки Tesseract: {e}")
+        return False
+
+# Глобальная переменная для остановки
+class StopProcessing:
+    def __init__(self):
+        self._stop = False
+    
+    def set(self):
+        self._stop = True
+    
+    def is_set(self):
+        return self._stop
+
+stop_processing = StopProcessing()
+
+# Настраиваем Tesseract при запуске
+tesseract_available = setup_tesseract()
+
+# CSS стили
 st.markdown("""
 <style>
     .main-header {
@@ -27,33 +73,22 @@ st.markdown("""
         text-align: center;
         margin-bottom: 2rem;
     }
-    .success-box {
+    .stop-button {
+        background-color: #ff4444 !important;
+        color: white !important;
+        border: none !important;
+    }
+    .metric-card {
+        background-color: #f8f9fa;
         padding: 1rem;
         border-radius: 0.5rem;
-        background-color: #d4edda;
-        border: 1px solid #c3e6cb;
-        color: #155724;
+        border-left: 4px solid #1f77b4;
+        margin: 0.5rem 0;
     }
-    .info-box {
-        padding: 1rem;
-        border-radius: 0.5rem;
-        background-color: #d1ecf1;
-        border: 1px solid #bee5eb;
-        color: #0c5460;
-    }
-    .progress-bar {
-        width: 100%;
-        background-color: #f0f0f0;
-        border-radius: 10px;
-        margin: 10px 0;
-    }
-    .progress-fill {
-        height: 20px;
-        background-color: #4CAF50;
-        border-radius: 10px;
-        text-align: center;
-        color: white;
-        line-height: 20px;
+    .success-rate {
+        font-size: 1.5rem;
+        font-weight: bold;
+        color: #28a745;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -63,56 +98,105 @@ class PDFProcessor:
         self.temp_dir = tempfile.mkdtemp()
         
     def find_order_number_ultra_fast(self, text):
-        """Поиск номера заказа в тексте"""
-        # Паттерн для 10 цифр, начинающихся с 20
-        matches = re.findall(r'\b(202[4-9]\d{6})\b', text)
-        if matches:
-            return matches[0]
+        """Поиск номера заказа в тексте - ОПТИМИЗИРОВАННЫЙ"""
+        patterns = [
+            r'\b(202[4-9]\d{6})\b',  # 2024XXXXXX
+            r'\b(20\d{8})\b',        # 20XXXXXXXX  
+            r'\b(\d{10})\b',         # Любые 10 цифр
+            r'\b(\d{8,12})\b',       # 8-12 цифр
+            r'\b(ORDER[:\\s]*)(\d{8,12})\b',  # ORDER: 12345678
+            r'\b(№[:\\s]*)(\d{8,12})\b',      # № 12345678
+        ]
         
-        matches_backup = re.findall(r'\b(20\d{8})\b', text)
-        if matches_backup:
-            return matches_backup[0]
-        
+        for pattern in patterns:
+            matches = re.findall(pattern, text, re.IGNORECASE)
+            if matches:
+                # Возвращаем последнюю группу (номер)
+                if isinstance(matches[0], tuple):
+                    for match in matches[0]:
+                        if match and match.isdigit():
+                            return match
+                else:
+                    return matches[0]
         return None
 
-    def extract_order_number_hybrid(self, page):
-        """Гибридный метод извлечения номера"""
-        # Шаг 1: Прямое извлечение текста из PDF
-        text_direct = page.get_text()
-        order_no = self.find_order_number_ultra_fast(text_direct)
-        if order_no:
-            return order_no, "direct"
-        
-        # Шаг 2: OCR если нужно
+    def extract_text_optimized(self, page):
+        """Оптимизированное извлечение текста из PDF"""
         try:
-            # Создаем изображение с оптимизированным разрешением
-            pix = page.get_pixmap(matrix=fitz.Matrix(1.2, 1.2))
+            # Пробуем разные методы извлечения текста
+            text_methods = []
             
-            # Конвертируем в PIL Image
-            img_data = pix.tobytes("ppm")
-            img = Image.open(io.BytesIO(img_data))
+            # 1. Быстрый метод
+            text_raw = page.get_text("text")
+            if text_raw and len(text_raw) > 10:
+                text_methods.append(text_raw)
             
-            # Быстрая обработка
-            img = img.convert('L')  # Grayscale
+            # 2. Метод слов (более точный)
+            words = page.get_text("words")
+            if words:
+                text_words = " ".join([word[4] for word in words if len(word) > 4])
+                text_methods.append(text_words)
             
-            # Быстрый OCR
-            ocr_text = pytesseract.image_to_string(
-                img, 
-                lang='eng',
-                config='--oem 1 --psm 6 -c tessedit_do_invert=0'
-            )
+            # 3. Метод блоков
+            blocks = page.get_text("blocks")  
+            if blocks:
+                text_blocks = " ".join([block[4] for block in blocks if len(block) > 4])
+                text_methods.append(text_blocks)
             
-            order_no = self.find_order_number_ultra_fast(ocr_text)
-            if order_no:
-                return order_no, "ocr"
-                
+            combined_text = " ".join(text_methods)
+            return combined_text
+            
         except Exception as e:
-            st.warning(f"OCR error on page: {e}")
-        
-        return None, "none"
+            return ""
 
-    def process_pdf(self, pdf_file, progress_bar, status_text):
-        """Основная функция обработки PDF"""
+    def process_page_fast(self, page_num, page):
+        """Быстрая обработка одной страницы"""
+        if stop_processing.is_set():
+            return None, "stopped", page_num
+        
+        try:
+            # Шаг 1: Быстрое извлечение текста (ОЧЕНЬ БЫСТРО)
+            text_direct = self.extract_text_optimized(page)
+            order_no = self.find_order_number_ultra_fast(text_direct)
+            
+            if order_no:
+                return order_no, "direct", page_num
+            
+            # Шаг 2: OCR если доступен (медленнее, но точнее)
+            if tesseract_available and not order_no:
+                try:
+                    # ОПТИМИЗИРОВАННОЕ создание изображения
+                    pix = page.get_pixmap(matrix=fitz.Matrix(1.2, 1.2))  # Низкое разрешение для скорости
+                    img_data = pix.tobytes("png")  # PNG быстрее
+                    img = Image.open(io.BytesIO(img_data))
+                    
+                    # Минимальная обработка изображения
+                    img = img.convert('L')  # Grayscale
+                    
+                    # ОПТИМИЗИРОВАННЫЙ OCR с быстрыми настройками
+                    ocr_text = pytesseract.image_to_string(
+                        img, 
+                        lang='eng',
+                        config='--oem 1 --psm 6 -c preserve_interword_spaces=0'
+                    )
+                    
+                    order_no = self.find_order_number_ultra_fast(ocr_text)
+                    if order_no:
+                        return order_no, "ocr", page_num
+                        
+                except Exception as e:
+                    return None, "ocr_error", page_num
+            
+            return None, "not_found", page_num
+            
+        except Exception as e:
+            return None, "error", page_num
+
+    def process_pdf_optimized(self, pdf_file, progress_bar, status_text):
+        """ОПТИМИЗИРОВАННАЯ обработка PDF"""
+        global stop_processing
+        stop_processing = StopProcessing()
+        
         start_time = time.time()
         
         # Сохраняем временный файл
@@ -135,15 +219,22 @@ class PDFProcessor:
                 'direct': 0,
                 'ocr': 0,
                 'failed': 0,
-                'files': []
+                'stopped': 0,
+                'files': [],
+                'success_rate': 0,
+                'total_time': 0
             }
             
-            # Обрабатываем каждую страницу
+            # Обрабатываем страницы с прогрессом
             for page_num in range(total_pages):
-                page = doc[page_num]
+                if stop_processing.is_set():
+                    stats['stopped'] = total_pages - page_num
+                    break
                 
-                # Извлекаем номер заказа
-                order_no, method = self.extract_order_number_hybrid(page)
+                page_start_time = time.time()
+                
+                page = doc[page_num]
+                order_no, method, _ = self.process_page_fast(page_num, page)
                 
                 # Создаем отдельный PDF
                 new_doc = fitz.open()
@@ -159,9 +250,9 @@ class PDFProcessor:
                 
                 # Избегаем перезаписи
                 counter = 1
+                base_name = os.path.splitext(filename)[0]
                 while os.path.exists(output_path):
-                    name, ext = os.path.splitext(filename)
-                    output_path = os.path.join(output_dir, f"{name}_{counter}{ext}")
+                    output_path = os.path.join(output_dir, f"{base_name}_{counter}.pdf")
                     counter += 1
                 
                 new_doc.save(output_path)
@@ -176,7 +267,12 @@ class PDFProcessor:
                 else:
                     stats['failed'] += 1
                 
-                stats['files'].append(os.path.basename(output_path))
+                stats['files'].append({
+                    'filename': os.path.basename(output_path),
+                    'page': page_num + 1,
+                    'method': method,
+                    'order_no': order_no
+                })
                 
                 # Обновляем прогресс
                 progress = (page_num + 1) / total_pages
@@ -184,49 +280,58 @@ class PDFProcessor:
                 
                 elapsed = time.time() - start_time
                 speed = (page_num + 1) / elapsed if elapsed > 0 else 0
+                processed = page_num + 1
+                
                 status_text.text(
-                    f"Обработано: {page_num + 1}/{total_pages} | "
-                    f"Скорость: {speed:.1f} стр/сек | "
-                    f"Прямой текст: {stats['direct']} | OCR: {stats['ocr']}"
+                    f"📊 Обработано: {processed}/{total_pages} | "
+                    f"⚡ Скорость: {speed:.1f} стр/сек | "
+                    f"✅ Текст: {stats['direct']} | "
+                    f"🔍 OCR: {stats['ocr']} | "
+                    f"❌ Не найдено: {stats['failed']}"
                 )
             
             doc.close()
             
-            # Создаем ZIP архив с результатами
-            zip_path = os.path.join(self.temp_dir, "results.zip")
-            with zipfile.ZipFile(zip_path, 'w') as zipf:
-                for file in os.listdir(output_dir):
-                    file_path = os.path.join(output_dir, file)
-                    zipf.write(file_path, file)
+            # Создаем ZIP архив
+            if stats['files']:
+                zip_path = os.path.join(self.temp_dir, "results.zip")
+                with zipfile.ZipFile(zip_path, 'w') as zipf:
+                    for file_info in stats['files']:
+                        file_path = os.path.join(output_dir, file_info['filename'])
+                        if os.path.exists(file_path):
+                            zipf.write(file_path, file_info['filename'])
+                
+                stats['zip_path'] = zip_path
             
+            # Расчет статистики
             total_time = time.time() - start_time
             stats['total_time'] = total_time
-            stats['zip_path'] = zip_path
+            
+            success_count = stats['direct'] + stats['ocr']
+            stats['success_rate'] = (success_count / stats['total']) * 100 if stats['total'] > 0 else 0
             
             return stats
             
         except Exception as e:
-            st.error(f"Ошибка обработки PDF: {e}")
+            st.error(f"❌ Ошибка обработки PDF: {str(e)}")
+            import traceback
+            st.error(f"Детали: {traceback.format_exc()}")
             return None
-
-    def cleanup(self):
-        """Очистка временных файлов"""
-        try:
-            if os.path.exists(self.temp_dir):
-                import shutil
-                shutil.rmtree(self.temp_dir)
-        except:
-            pass
 
     def get_download_link(self, file_path, link_text):
         """Создает ссылку для скачивания файла"""
+        if not file_path or not os.path.exists(file_path):
+            return "❌ Файл не найден"
+            
         with open(file_path, "rb") as f:
             data = f.read()
         b64 = base64.b64encode(data).decode()
-        href = f'<a href="data:application/zip;base64,{b64}" download="pdf_results.zip">{link_text}</a>'
+        href = f'<a href="data:application/zip;base64,{b64}" download="pdf_results.zip" style="background-color: #4CAF50; color: white; padding: 12px 24px; text-decoration: none; border-radius: 8px; display: inline-block; font-weight: bold;">{link_text}</a>'
         return href
 
 def main():
+    global stop_processing
+    
     # Заголовок приложения
     st.markdown('<div class="main-header">📄 PDF Splitter - Ultra Rapid</div>', unsafe_allow_html=True)
     
@@ -237,26 +342,21 @@ def main():
     # Боковая панель с информацией
     with st.sidebar:
         st.header("ℹ️ Информация")
-        st.markdown("""
-        **Функции:**
-        - 📖 Разделение PDF на отдельные страницы
-        - 🔍 Автоматическое определение номеров заказов
-        - ⚡ Быстрая обработка (текст + OCR)
-        - 📥 Скачивание результатов в ZIP
-        
-        **Поддерживаемые форматы номеров:**
-        - 2024XXXXXX (10 цифр)
-        - 20XXXXXXXX (10 цифр)
-        """)
         
         st.markdown("---")
-        st.markdown("**Статус Tesseract OCR:**")
-        try:
-            pytesseract.get_tesseract_version()
-            st.success("✅ Tesseract доступен")
-        except:
-            st.warning("⚠️ Tesseract не найден - OCR недоступен")
-    
+        st.markdown("**Статус системы:**")
+        if tesseract_available:
+            st.success("✅ Tesseract OCR доступен")
+            st.info("Режим: Текст + OCR")
+        else:
+            st.warning("⚠️ Tesseract не доступен")
+            st.info("Режим: Только текст")
+            
+        st.markdown("---")
+        if st.button("🛑 Экстренная остановка", use_container_width=True):
+            stop_processing.set()
+            st.warning("Обработка будет остановлена!")
+
     # Основная область
     col1, col2 = st.columns([2, 1])
     
@@ -265,86 +365,100 @@ def main():
         uploaded_file = st.file_uploader(
             "Выберите PDF файл для обработки",
             type="pdf",
-            help="Загрузите PDF файл для разделения на отдельные страницы"
+            help="Поддерживаются PDF файлы любого размера"
         )
         
         if uploaded_file is not None:
             st.success(f"✅ Файл загружен: {uploaded_file.name}")
             st.info(f"📊 Размер файла: {uploaded_file.size / 1024 / 1024:.2f} MB")
             
-            if st.button("🚀 Начать обработку", type="primary"):
-                # Элементы для отображения прогресса
+            col_btn1, col_btn2 = st.columns([2, 1])
+            
+            with col_btn1:
+                process_clicked = st.button("🚀 Начать обработку", type="primary", use_container_width=True)
+            
+            with col_btn2:
+                stop_clicked = st.button("🛑 Остановить", use_container_width=True)
+            
+            if stop_clicked:
+                stop_processing.set()
+                st.warning("Обработка остановлена!")
+            
+            if process_clicked:
+                # Элементы интерфейса
                 progress_bar = st.progress(0)
                 status_text = st.empty()
                 results_placeholder = st.empty()
                 
                 # Обработка PDF
-                with st.spinner("Обработка PDF..."):
-                    stats = st.session_state.processor.process_pdf(
+                with st.spinner("🔄 Обработка PDF..."):
+                    stats = st.session_state.processor.process_pdf_optimized(
                         uploaded_file, 
                         progress_bar, 
                         status_text
                     )
                 
                 if stats:
-                    # Отображаем результаты
+                    # Детальный отчет
                     with results_placeholder.container():
                         st.markdown("---")
-                        st.subheader("📊 Результаты обработки")
+                        st.subheader("📊 Детальный отчет")
                         
+                        # Основные метрики
                         col1, col2, col3, col4 = st.columns(4)
-                        
                         with col1:
                             st.metric("Всего страниц", stats['total'])
                         with col2:
-                            st.metric("Прямой текст", stats['direct'])
+                            st.metric("Найдено текстом", stats['direct'])
                         with col3:
-                            st.metric("OCR", stats['ocr'])
+                            st.metric("Найдено OCR", stats['ocr'])
                         with col4:
-                            st.metric("Без номера", stats['failed'])
+                            st.metric("Не найдено", stats['failed'])
                         
-                        st.metric("Общее время", f"{stats['total_time']:.1f} сек")
+                        # Дополнительная статистика
+                        col_time, col_rate, col_stopped = st.columns(3)
+                        with col_time:
+                            st.metric("Общее время", f"{stats['total_time']:.1f}с")
+                        with col_rate:
+                            st.metric("Успешность", f"{stats['success_rate']:.1f}%")
+                        with col_stopped:
+                            if stats['stopped'] > 0:
+                                st.metric("Остановлено", stats['stopped'])
                         
-                        # Ссылка для скачивания
-                        st.markdown("---")
-                        st.subheader("📥 Скачать результаты")
+                        if stats['stopped'] > 0:
+                            st.warning(f"⏹️ Обработка была остановлена! {stats['stopped']} страниц не обработано.")
                         
-                        download_link = st.session_state.processor.get_download_link(
-                            stats['zip_path'], 
-                            "⬇️ Скачать ZIP архив с PDF файлами"
-                        )
-                        st.markdown(download_link, unsafe_allow_html=True)
+                        # Скачивание результатов
+                        if stats.get('zip_path'):
+                            st.markdown("---")
+                            st.subheader("📥 Скачать результаты")
+                            download_link = st.session_state.processor.get_download_link(
+                                stats['zip_path'], 
+                                "⬇️ Скачать ZIP архив с PDF файлами"
+                            )
+                            st.markdown(download_link, unsafe_allow_html=True)
                         
-                        # Список созданных файлов
+                        # Список файлов
                         with st.expander("📋 Показать список созданных файлов"):
-                            for i, filename in enumerate(stats['files'], 1):
-                                st.write(f"{i}. {filename}")
+                            for file_info in stats['files']:
+                                method_icon = "✅" if file_info['method'] == 'direct' else "🔍" if file_info['method'] == 'ocr' else "❌"
+                                st.write(f"{method_icon} Страница {file_info['page']}: `{file_info['filename']}`")
     
     with col2:
         st.subheader("⚡ Быстрый старт")
         st.markdown("""
         1. **Загрузите** PDF файл
-        2. **Нажмите** "Начать обработку"
-        3. **Скачайте** результаты
+        2. **Нажмите** кнопку обработки
+        3. **Дождитесь** завершения
+        4. **Скачайте** результаты
         
-        **Методы определения номеров:**
-        - ✅ **Прямой текст**: Мгновенное извлечение
-        - 🔍 **OCR**: Для сканированных документов
-        - ⚡ **Автоматически**: Выбирается лучший метод
+        **Функции:**
+        - ✅ Автоматическое определение номеров
+        - 🔍 Распознавание текста и изображений
+        - ⏹️ Остановка в любой момент
+        - 📊 Детальная статистика
+        - ⚡ Высокая скорость
         """)
-        
-        st.markdown("---")
-        st.subheader("🛠️ Технологии")
-        st.markdown("""
-        - **PyMuPDF**: Обработка PDF
-        - **Tesseract**: OCR распознавание
-        - **Streamlit**: Веб-интерфейс
-        - **Pillow**: Обработка изображений
-        """)
-
-# Очистка при завершении
-import atexit
-atexit.register(lambda: st.session_state.get('processor', PDFProcessor()).cleanup())
 
 if __name__ == "__main__":
     main()
