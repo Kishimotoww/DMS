@@ -30,6 +30,28 @@ class StopProcessing:
 
 stop_processing = StopProcessing()
 
+# Install Tesseract
+
+def install_tesseract():
+    try:
+        # Пробуем использовать системный tesseract
+        pytesseract.get_tesseract_version()
+        return True
+    except:
+        try:
+            # Устанавливаем tesseract
+            result = subprocess.run(['apt-get', 'update'], capture_output=True, text=True)
+            result = subprocess.run(['apt-get', 'install', '-y', 'tesseract-ocr'], 
+                                  capture_output=True, text=True)
+            if result.returncode == 0:
+                st.success("✅ Tesseract успешно установлен!")
+                return True
+        except:
+            pass
+    return False
+
+# Устанавливаем Tesseract при запуске
+tesseract_available = install_tesseract()
 # Проверяем доступность Tesseract
 def check_tesseract():
     try:
