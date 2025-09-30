@@ -201,7 +201,7 @@ class PDFProcessor:
             
             # Подготавливаем данные страниц для многопоточности
             page_data_list = []
-            for page_num in range(total_poces):
+            for page_num in range(total_pages):
                 if processing_state.should_stop():
                     break
                 # Получаем raw данные страницы
