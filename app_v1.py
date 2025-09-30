@@ -1,5 +1,6 @@
 import streamlit as st
 import fitz
+import pytesseract
 from PIL import Image
 import io
 import re
@@ -8,6 +9,29 @@ import os
 import zipfile
 import base64
 import time
+import subprocess
+
+# Проверяем и устанавливаем Tesseract
+def install_tesseract():
+    try:
+        # Пробуем использовать системный tesseract
+        pytesseract.get_tesseract_version()
+        return True
+    except:
+        try:
+            # Устанавливаем tesseract
+            result = subprocess.run(['apt-get', 'update'], capture_output=True, text=True)
+            result = subprocess.run(['apt-get', 'install', '-y', 'tesseract-ocr'], 
+                                  capture_output=True, text=True)
+            if result.returncode == 0:
+                st.success("✅ Tesseract успешно установлен!")
+                return True
+        except:
+            pass
+    return False
+
+# Устанавливаем Tesseract при запуске
+tesseract_available = install_tesseract()
 
 # Настройка страницы
 st.set_page_config(
