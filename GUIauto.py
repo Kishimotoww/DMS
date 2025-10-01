@@ -304,6 +304,10 @@ def main():
         st.session_state.current_file_index = 0
     if 'current_step_index' not in st.session_state:
         st.session_state.current_step_index = 0
+    if 'edited_files' not in st.session_state:
+        st.session_state.edited_files = []
+    
+    # ... остальной код
         
     st.markdown('<div class="main-header">🎓 PDF Manual Assistant - No Installation Needed</div>', unsafe_allow_html=True)
     
@@ -501,24 +505,27 @@ with tab1:
                     st.rerun()
     
     with tab3:
-        st.subheader("👨‍💻 Ручное выполнение с инструкциями")
-        
-        if not st.session_state.processed_results:
-            st.info("📝 Сначала обработайте PDF файл во вкладке 'Обработка PDF'")
-        elif not st.session_state.assistant.workflows:
-            st.info("🎓 Сначала создайте процесс во вкладке 'Создание процесса'")
+     st.subheader("👨‍💻 Ручное выполнение с инструкциями")
+    
+    if not st.session_state.processed_results:
+        st.info("📝 Сначала обработайте PDF файл во вкладке 'Обработка PDF'")
+    elif not st.session_state.assistant.workflows:
+        st.info("🎓 Сначала создайте процесс во вкладке 'Создание процесса'")
         else:
-            workflow_names = list(st.session_state.assistant.workflows.keys())
-            selected_workflow = st.selectbox("Выберите процесс", workflow_names)
-            
-            if selected_workflow:
-                # Получаем подтвержденные файлы
-                confirmed_files = st.session_state.get('confirmed_files', [])
-                if not confirmed_files:
-                    st.warning("⚠️ Подтвердите номера во вкладке 'Обработка PDF'. Перейдите в эту вкладку, проверьте номера и нажмите кнопки '✅ Подтвердить'")
-                    if st.button("🔄 Проверить снова", key="check_again"):
-                        st.rerun()
-                else:
+        confirmed_files = st.session_state.get('confirmed_files', [])
+        if not confirmed_files:
+            st.warning("⚠️ Подтвердите номера во вкладке 'Обработка PDF'")
+            st.info("""
+            **Как подтвердить файлы:**
+            1. Перейдите во вкладку "📄 Обработка PDF"
+            2. Проверьте автоматически найденные номера
+            3. При необходимости отредактируйте номера в полях ввода
+            4. Нажмите кнопки "✅ Подтвердить" для каждого нужного файла
+            5. Вернитесь в эту вкладку
+            """)
+            if st.button("🔄 Проверить подтвержденные файлы", key="check_confirmed"):
+                st.rerun()
+        else:
                     order_numbers = [f['order_number'] for f in confirmed_files]
                     
                     # Генерация руководства
