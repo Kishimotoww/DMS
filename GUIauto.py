@@ -383,13 +383,13 @@ for file_info in results['files']:
                     st.session_state.confirmed_files = confirmed_files
                     st.rerun()
 
-if confirmed_files:
-    st.success(f"✅ Подтверждено файлов: {len(confirmed_files)}")
-    
-    # Кнопка для сброса подтвержденных файлов
-    if st.button("🔄 Сбросить подтвержденные файлы", type="secondary"):
-        st.session_state.confirmed_files = []
-        st.rerun()
+for file_info in results['files']:
+    if file_info['order_number']:
+        col_a, col_b, col_c = st.columns([2, 2, 1])
+        with col_a:
+            st.write(f"**{file_info['filename']}**")
+            st.write(f"Страница: {file_info['page_number']}")
+        with col_b:
             # Поле для редактирования номера
             new_number = st.text_input(
                 "Номер заказа", 
@@ -409,6 +409,15 @@ if confirmed_files:
                     confirmed_files.append(file_info)
                     st.session_state.confirmed_files = confirmed_files
                     st.rerun()
+
+# ЭТО ДОЛЖНО БЫТЬ ПОСЛЕ ЦИКЛА for, А НЕ ВНУТРИ НЕГО!
+if confirmed_files:
+    st.success(f"✅ Подтверждено файлов: {len(confirmed_files)}")
+    
+    # Кнопка для сброса подтвержденных файлов
+    if st.button("🔄 Сбросить подтвержденные файлы", type="secondary"):
+        st.session_state.confirmed_files = []
+        st.rerun()
 
                         if confirmed_files:
                         st.success(f"✅ Подтверждено файлов: {len(confirmed_files)}")
