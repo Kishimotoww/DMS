@@ -12,11 +12,14 @@ import time
 import json
 from datetime import datetime
 import pandas as pd
+import pyautogui
+import keyboard
+import threading
 
 # Настройка страницы
 st.set_page_config(
-    page_title="PDF Auto Assistant - Manual Mode", 
-    page_icon="🎓",
+    page_title="PDF Auto Assistant - Full Automation", 
+    page_icon="🤖",
     layout="wide"
 )
 
@@ -49,11 +52,13 @@ if 'tesseract_checked' not in st.session_state:
 
 tesseract_available = st.session_state.tesseract_available
 
-# Класс для ручного помощника
-class ManualAssistant:
+# Класс для автоматического выполнения
+class AutoExecutor:
     def __init__(self):
-        self.workflows_file = "workflows.json"
+        self.workflows_file = "auto_workflows.json"
         self.load_workflows()
+        self.is_running = False
+        self.current_task = None
     
     def load_workflows(self):
         """Загрузка рабочих процессов"""
@@ -85,35 +90,104 @@ class ManualAssistant:
         self.save_workflows()
         return True
     
-    def generate_manual_guide(self, workflow_name, order_numbers):
-        """Генерация руководства для ручного выполнения"""
-        if workflow_name not in self.workflows:
-            return None
+    def record_position(self, step_name):
+        """Запись позиции мыши"""
+        st.info(f"🔹 Наведите курсор на место для '{step_name}' и нажмите F2")
         
-        guide = {
-            'workflow_name': workflow_name,
-            'total_files': len(order_numbers),
-            'completion_time': len(order_numbers) * 2,
-            'instructions': [],
-            'generated_at': datetime.now().isoformat()
-        }
+        def on_key_event(e):
+            if e.name == 'f2':
+                x, y = pyautogui.position()
+                st.session_state.recorded_positions[step_name] = (x, y)
+                st.success(f"✅ Позиция записана: ({x}, {y})")
+                return False
+            return True
+        
+        keyboard.on_press_key('f2', on_key_event)
+        return True
+    
+    def execute_step(self, step, order_number):
+        """Выполнение одного шага"""
+        try:
+            if step['type'] == 'click':
+                if step['location'] in st.session_state.recorded_positions:
+                    x, y = st.session_state.recorded_positions[step['location']]
+                    pyautogui.click(x, y)
+                    time.sleep(0.5)
+                    
+            elif step['type'] == 'type':
+                if step['location'] in st.session_state.recorded_positions:
+                    x, y = st.session_state.recorded_positions[step['location']]
+                    pyautogui.click(x, y)
+                    time.sleep(0.2)
+                    text_to_type = step['text_to_type'].replace('{ORDER_NUMBER}', order_number)
+                    pyautogui.write(text_to_type, interval=0.05)
+                    time.sleep(0.5)
+                    
+            elif step['type'] == 'wait':
+                seconds = int(step['duration'].split()[0])
+                time.sleep(seconds)
+                
+            elif step['type'] == 'hotkey':
+                keys = step['keys'].lower()
+                pyautogui.hotkey(*keys.split('+'))
+                time.sleep(0.5)
+                
+            elif step['type'] == 'focus':
+                if step['location'] in st.session_state.recorded_positions:
+                    x, y = st.session_state.recorded_positions[step['location']]
+                    pyautogui.click(x, y)
+                    time.sleep(0.5)
+                    
+            elif step['type'] == 'button':
+                if step['location'] in st.session_state.recorded_positions:
+                    x, y = st.session_state.recorded_positions[step['location']]
+                    pyautogui.click(x, y)
+                    time.sleep(1)
+            
+            return True
+        except Exception as e:
+            st.error(f"❌ Ошибка выполнения шага: {str(e)}")
+            return False
+    
+    def execute_workflow(self, workflow_name, order_numbers, progress_callback=None):
+        """Выполнение рабочего процесса для всех номеров"""
+        if workflow_name not in self.workflows:
+            return False
+        
+        self.is_running = True
+        total_files = len(order_numbers)
         
         for i, order_number in enumerate(order_numbers):
-            file_guide = {
-                'file_number': i + 1,
-                'order_number': order_number,
-                'steps': []
-            }
+            if not self.is_running:
+                break
+                
+            self.current_task = f"Обработка {order_number} ({i+1}/{total_files})"
             
-            for step in self.workflows[workflow_name]['steps']:
-                step_copy = step.copy()
-                if 'text_to_type' in step_copy:
-                    step_copy['text_to_type'] = step_copy['text_to_type'].replace('{ORDER_NUMBER}', order_number)
-                file_guide['steps'].append(step_copy)
+            if progress_callback:
+                progress_callback(i, total_files, self.current_task)
             
-            guide['instructions'].append(file_guide)
+            # Выполняем все шаги для текущего номера
+            for step_num, step in enumerate(self.workflows[workflow_name]['steps']):
+                if not self.is_running:
+                    break
+                    
+                success = self.execute_step(step, order_number)
+                if not success:
+                    st.error(f"❌ Ошибка на шаге {step_num + 1}")
+                    self.is_running = False
+                    return False
+                
+                time.sleep(0.5)  # Небольшая пауза между шагами
+            
+            time.sleep(1)  # Пауза между файлами
         
-        return guide
+        self.is_running = False
+        self.current_task = None
+        return True
+    
+    def stop_execution(self):
+        """Остановка выполнения"""
+        self.is_running = False
 
 # Класс обработки PDF
 class PDFProcessor:
@@ -252,11 +326,14 @@ class PDFProcessor:
 if 'processor' not in st.session_state:
     st.session_state.processor = PDFProcessor()
 
-if 'assistant' not in st.session_state:
-    st.session_state.assistant = ManualAssistant()
+if 'executor' not in st.session_state:
+    st.session_state.executor = AutoExecutor()
 
 if 'processed_results' not in st.session_state:
     st.session_state.processed_results = None
+
+if 'recorded_positions' not in st.session_state:
+    st.session_state.recorded_positions = {}
 
 # CSS стили
 st.markdown("""
@@ -282,16 +359,19 @@ st.markdown("""
         border-left: 4px solid #667eea;
         box-shadow: 0 2px 4px rgba(0,0,0,0.1);
     }
-    .current-step {
+    .record-box {
         background-color: #fff3cd;
         border-left: 4px solid #ffc107;
-    }
-    .file-header {
-        background-color: #e8f4fd;
         padding: 15px;
+        margin: 10px 0;
         border-radius: 8px;
-        margin: 15px 0;
-        font-weight: bold;
+    }
+    .auto-box {
+        background-color: #d4edda;
+        border-left: 4px solid #28a745;
+        padding: 15px;
+        margin: 10px 0;
+        border-radius: 8px;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -300,17 +380,15 @@ def main():
     # Инициализация session_state переменных
     if 'confirmed_files' not in st.session_state:
         st.session_state.confirmed_files = []
-    if 'current_file_index' not in st.session_state:
-        st.session_state.current_file_index = 0
-    if 'current_step_index' not in st.session_state:
-        st.session_state.current_step_index = 0
     if 'edited_files' not in st.session_state:
         st.session_state.edited_files = []
+    if 'current_recording' not in st.session_state:
+        st.session_state.current_recording = None
         
-    st.markdown('<div class="main-header">🎓 PDF Manual Assistant - No Installation Needed</div>', unsafe_allow_html=True)
+    st.markdown('<div class="main-header">🤖 PDF Auto Assistant - Full Automation</div>', unsafe_allow_html=True)
     
     # Вкладки
-    tab1, tab2, tab3 = st.tabs(["📄 Обработка PDF", "🎓 Создание процесса", "👨‍💻 Ручное выполнение"])
+    tab1, tab2, tab3 = st.tabs(["📄 Обработка PDF", "🎯 Настройка авто", "🚀 Авто-выполнение"])
     
     with tab1:
         st.subheader("Обработка PDF и извлечение номеров")
@@ -323,7 +401,6 @@ def main():
             if st.button("🔄 Начать обработку PDF", type="primary", use_container_width=True):
                 progress_bar = st.progress(0)
                 status_text = st.empty()
-                results_placeholder = st.empty()
                 
                 with st.spinner("Обработка PDF..."):
                     results = st.session_state.processor.process_pdf(
@@ -332,8 +409,8 @@ def main():
                 
                 if results:
                     st.session_state.processed_results = results
-                    # Сбрасываем подтвержденные файлы при новой обработке
                     st.session_state.confirmed_files = []
+                    st.session_state.edited_files = results['files'].copy()
                     st.rerun()
         
         # Показываем результаты обработки если они есть
@@ -353,115 +430,89 @@ def main():
                 col3.metric("Без номеров", len(files_without_numbers))
                 col4.metric("Время", f"{results['processing_time']:.1f}с")
                 
-                # Ручная проверка и редактирование
+                # Редактирование номеров
                 st.markdown("---")
                 st.subheader("✏️ Проверка и редактирование номеров")
-                st.info("Проверьте и при необходимости исправьте номера перед созданием инструкций")
-                
-                # Используем session_state для хранения отредактированных номеров
-                if 'edited_files' not in st.session_state or not st.session_state.edited_files:
-                    st.session_state.edited_files = results['files'].copy()
                 
                 confirmed_files = st.session_state.get('confirmed_files', [])
                 
                 for i, file_info in enumerate(st.session_state.edited_files):
-                    if file_info['order_number']:  # Показываем только файлы с номерами
+                    if file_info['order_number']:
                         col_a, col_b, col_c = st.columns([2, 2, 1])
                         with col_a:
                             st.write(f"**{file_info['filename']}**")
                             st.write(f"Страница: {file_info['page_number']}")
                         with col_b:
-                            # Поле для редактирования номера
                             new_number = st.text_input(
                                 "Номер заказа", 
                                 value=file_info['order_number'], 
                                 key=f"num_{file_info['filename']}",
                                 label_visibility="visible"
                             )
-                            # Обновляем номер в отредактированных файлах
                             st.session_state.edited_files[i]['order_number'] = new_number
                         with col_c:
-                            # Проверяем, подтвержден ли уже этот файл
                             is_confirmed = any(f['filename'] == file_info['filename'] for f in confirmed_files)
                             
                             if is_confirmed:
                                 st.success("✓")
                             else:
                                 if st.button("✅ Подтвердить", key=f"ok_{file_info['filename']}"):
-                                    # Добавляем текущую версию файла (с возможными правками) в подтвержденные
                                     confirmed_files.append(st.session_state.edited_files[i])
                                     st.session_state.confirmed_files = confirmed_files
                                     st.rerun()
                 
-                # Показываем статистику по подтвержденным файлам
                 if confirmed_files:
                     st.success(f"✅ Подтверждено файлов: {len(confirmed_files)}")
                     
-                    # Показываем список подтвержденных файлов
                     with st.expander("📋 Показать подтвержденные файлы"):
                         for cf in confirmed_files:
                             st.write(f"- {cf['filename']}: {cf['order_number']}")
-                    
-                    # Кнопки управления
-                    col_reset, col_refresh = st.columns(2)
-                    with col_reset:
-                        if st.button("🔄 Сбросить все подтверждения", type="secondary"):
-                            st.session_state.confirmed_files = []
-                            st.rerun()
-                    with col_refresh:
-                        if st.button("🔄 Обновить список", type="secondary"):
-                            st.rerun()
     
     with tab2:
-        st.subheader("🎓 Создание процесса обработки")
+        st.subheader("🎯 Настройка автоматического выполнения")
         
         st.info("""
-        **Создайте пошаговый процесс для ручного выполнения.**
-        Программа сгенерирует подробные инструкции для каждого файла.
+        **Создайте процесс и запишите позиции элементов интерфейса.**
+        Программа запомнит куда кликать и что вводить, затем выполнит всё автоматически.
         """)
         
-        workflow_name = st.text_input("Название процесса", value="Обработка_заказов_RDS")
+        workflow_name = st.text_input("Название процесса", value="Авто_обработка_RDS")
         
-        st.markdown("### Добавление шагов процесса:")
+        st.markdown("### Шаги процесса:")
         
-        # Форма для добавления шагов
         step_type = st.selectbox("Тип шага", 
-                               ["click", "type", "wait", "hotkey", "focus", "select", "button"])
+                               ["click", "type", "wait", "hotkey", "focus", "button"])
         
         step_description = st.text_input("Описание шага", placeholder="Что нужно сделать на этом шаге?")
         
         step_params = {}
         if step_type == "click":
             step_params['action'] = "Кликнуть"
-            step_params['location'] = st.text_input("Где кликнуть?", placeholder="В поле ввода номера заказа")
-        
+            step_params['location'] = st.text_input("Название элемента", placeholder="поле_ввода_номера")
+            
         elif step_type == "type":
             step_params['action'] = "Ввести текст"
             text_to_type = st.text_input("Текст для ввода", value="{ORDER_NUMBER}")
             step_params['text_to_type'] = text_to_type
-            step_params['location'] = st.text_input("Куда вводить?", placeholder="В поле поиска")
-        
+            step_params['location'] = st.text_input("Название поля", placeholder="поле_поиска")
+            
         elif step_type == "wait":
             step_params['action'] = "Подождать"
             seconds = st.number_input("Секунды", min_value=1, value=2)
             step_params['duration'] = f"{seconds} секунд"
-        
+            
         elif step_type == "hotkey":
             step_params['action'] = "Нажать комбинацию клавиш"
-            step_params['keys'] = st.text_input("Клавиши", value="Ctrl+V", placeholder="Ctrl+V, Enter, Tab...")
-        
+            step_params['keys'] = st.text_input("Клавиши", value="ctrl+v", placeholder="ctrl+v, enter, tab")
+            
         elif step_type == "focus":
             step_params['action'] = "Перейти в поле"
-            step_params['location'] = st.text_input("Какое поле?", placeholder="Поле ввода номера заказа")
-        
-        elif step_type == "select":
-            step_params['action'] = "Выбрать из списка"
-            step_params['location'] = st.text_input("Какой список?", placeholder="Выпадающий список статуса")
-        
+            step_params['location'] = st.text_input("Название поля", placeholder="поле_номера")
+            
         elif step_type == "button":
             step_params['action'] = "Нажать кнопку"
-            step_params['location'] = st.text_input("Какую кнопку?", placeholder="Кнопка 'Поиск', 'Сохранить'")
-        
+            step_params['location'] = st.text_input("Название кнопки", placeholder="кнопка_поиска")
+
         # Превью шагов
         if 'workflow_steps' not in st.session_state:
             st.session_state.workflow_steps = []
@@ -483,7 +534,11 @@ def main():
                 st.write(f"**Шаг {i}: {step['description']}**")
                 st.write(f"**Действие:** {step['action']}")
                 if 'location' in step:
-                    st.write(f"**Место:** {step['location']}")
+                    st.write(f"**Элемент:** {step['location']}")
+                    # Кнопка записи позиции
+                    if st.button(f"🎯 Записать позицию", key=f"record_{i}"):
+                        st.session_state.current_recording = step['location']
+                        st.info(f"🔹 Наведите курсор на '{step['location']}' и нажмите F2")
                 if 'text_to_type' in step:
                     st.write(f"**Текст:** `{step['text_to_type']}`")
                 if 'duration' in step:
@@ -492,150 +547,92 @@ def main():
                     st.write(f"**Клавиши:** {step['keys']}")
                 st.markdown('</div>', unsafe_allow_html=True)
             
+            # Показать записанные позиции
+            if st.session_state.recorded_positions:
+                st.markdown("### 📍 Записанные позиции:")
+                for element, pos in st.session_state.recorded_positions.items():
+                    st.write(f"**{element}:** {pos}")
+            
             col_save, col_clear = st.columns(2)
             with col_save:
                 if st.button("💾 Сохранить процесс", type="secondary", use_container_width=True):
-                    if st.session_state.assistant.create_workflow(workflow_name, st.session_state.workflow_steps):
+                    if st.session_state.executor.create_workflow(workflow_name, st.session_state.workflow_steps):
                         st.success(f"✅ Процесс '{workflow_name}' сохранен!")
             with col_clear:
                 if st.button("🗑️ Очистить шаги", type="secondary", use_container_width=True):
                     st.session_state.workflow_steps = []
+                    st.session_state.recorded_positions = {}
                     st.rerun()
     
     with tab3:
-        st.subheader("👨‍💻 Ручное выполнение с инструкциями")
+        st.subheader("🚀 Автоматическое выполнение")
         
         if not st.session_state.processed_results:
             st.info("📝 Сначала обработайте PDF файл во вкладке 'Обработка PDF'")
-        elif not st.session_state.assistant.workflows:
-            st.info("🎓 Сначала создайте процесс во вкладке 'Создание процесса'")
+        elif not st.session_state.executor.workflows:
+            st.info("🎯 Сначала создайте процесс во вкладке 'Настройка авто'")
         else:
             confirmed_files = st.session_state.get('confirmed_files', [])
             if not confirmed_files:
                 st.warning("⚠️ Подтвердите номера во вкладке 'Обработка PDF'")
-                st.info("""
-                **Как подтвердить файлы:**
-                1. Перейдите во вкладку "📄 Обработка PDF"
-                2. Проверьте автоматически найденные номера
-                3. При необходимости отредактируйте номера в полях ввода
-                4. Нажмите кнопки "✅ Подтвердить" для каждого нужного файла
-                5. Вернитесь в эту вкладку
-                """)
-                if st.button("🔄 Проверить подтвержденные файлы", key="check_confirmed"):
-                    st.rerun()
             else:
-                workflow_names = list(st.session_state.assistant.workflows.keys())
+                workflow_names = list(st.session_state.executor.workflows.keys())
                 selected_workflow = st.selectbox("Выберите процесс", workflow_names)
                 
                 if selected_workflow:
-                    order_numbers = [f['order_number'] for f in confirmed_files]
+                    # Проверка записанных позиций
+                    workflow = st.session_state.executor.workflows[selected_workflow]
+                    missing_positions = []
                     
-                    # Генерация руководства
-                    guide = st.session_state.assistant.generate_manual_guide(
-                        selected_workflow, order_numbers
-                    )
+                    for step in workflow['steps']:
+                        if 'location' in step and step['location'] not in st.session_state.recorded_positions:
+                            missing_positions.append(step['location'])
                     
-                    if guide:
-                        st.markdown(f'<div class="guide-box">', unsafe_allow_html=True)
-                        st.subheader("📋 Руководство по выполнению")
-                        st.write(f"**Процесс:** {guide['workflow_name']}")
-                        st.write(f"**Файлов для обработки:** {guide['total_files']}")
-                        st.write(f"**Примерное время:** {guide['completion_time']} минут")
-                        st.write(f"**Сгенерировано:** {datetime.fromisoformat(guide['generated_at']).strftime('%d.%m.%Y %H:%M')}")
+                    if missing_positions:
+                        st.error(f"❌ Не записаны позиции: {', '.join(missing_positions)}")
+                        st.info("Вернитесь во вкладку 'Настройка авто' и запишите позиции для всех элементов")
+                    else:
+                        st.markdown(f'<div class="auto-box">', unsafe_allow_html=True)
+                        st.success("✅ Все позиции записаны! Готово к автоматическому выполнению.")
                         st.markdown('</div>', unsafe_allow_html=True)
                         
-                        # Инструкции для каждого файла
-                        st.markdown("### Пошаговые инструкции:")
+                        order_numbers = [f['order_number'] for f in confirmed_files]
                         
-                        current_file_index = st.session_state.current_file_index
-                        current_step_index = st.session_state.current_step_index
+                        st.write(f"**Файлов для обработки:** {len(order_numbers)}")
+                        st.write(f"**Примерное время:** {len(order_numbers) * 10} секунд")
                         
-                        if current_file_index < len(guide['instructions']):
-                            current_file = guide['instructions'][current_file_index]
-                            
-                            st.markdown(f'<div class="file-header">', unsafe_allow_html=True)
-                            st.subheader(f"📄 Файл {current_file['file_number']} из {len(guide['instructions'])}")
-                            st.write(f"**Номер заказа:** {current_file['order_number']}")
-                            st.markdown('</div>', unsafe_allow_html=True)
-                            
-                            # Показываем шаги для текущего файла
-                            for i, step in enumerate(current_file['steps']):
-                                step_class = "current-step" if i == current_step_index else "step-box"
-                                st.markdown(f'<div class="{step_class}">', unsafe_allow_html=True)
-                                
-                                # Номер шага и статус
-                                status = "🟢 ТЕКУЩИЙ ШАГ" if i == current_step_index else "⚪"
-                                st.write(f"**{status} Шаг {i+1}: {step['description']}**")
-                                
-                                # Детали шага
-                                st.write(f"**Действие:** {step['action']}")
-                                if 'location' in step:
-                                    st.write(f"**Место:** {step['location']}")
-                                if 'text_to_type' in step and 'text_to_type' in step:
-                                    display_text = step['text_to_type'].replace('{ORDER_NUMBER}', current_file['order_number'])
-                                    st.write(f"**Текст:** `{display_text}`")
-                                if 'duration' in step:
-                                    st.write(f"**Время:** {step['duration']}")
-                                if 'keys' in step:
-                                    st.write(f"**Клавиши:** {step['keys']}")
-                                
-                                st.markdown('</div>', unsafe_allow_html=True)
-                            
-                            # Управление прогрессом
-                            st.markdown("### Управление выполнением:")
-                            col1, col2, col3 = st.columns(3)
-                            
-                            with col1:
-                                if st.button("⏮️ Предыдущий шаг", use_container_width=True) and current_step_index > 0:
-                                    st.session_state.current_step_index -= 1
-                                    st.rerun()
-                            
-                            with col2:
-                                if st.button("✅ Шаг выполнен", type="primary", use_container_width=True):
-                                    if current_step_index < len(current_file['steps']) - 1:
-                                        st.session_state.current_step_index += 1
-                                        st.success("✓ Шаг выполнен!")
-                                        st.rerun()
+                        # Прогресс выполнения
+                        progress_bar = st.progress(0)
+                        status_text = st.empty()
+                        log_container = st.container()
+                        
+                        col_start, col_stop = st.columns(2)
+                        with col_start:
+                            if st.button("🚀 Начать автоматическое выполнение", type="primary", use_container_width=True):
+                                def run_automation():
+                                    def progress_callback(current, total, task):
+                                        progress_bar.progress((current + 1) / total)
+                                        status_text.text(f"🔄 {task}")
+                                    
+                                    success = st.session_state.executor.execute_workflow(
+                                        selected_workflow, order_numbers, progress_callback
+                                    )
+                                    
+                                    if success:
+                                        status_text.text("✅ Автоматическое выполнение завершено!")
+                                        st.balloons()
                                     else:
-                                        # Переход к следующему файлу
-                                        if current_file_index < len(guide['instructions']) - 1:
-                                            st.session_state.current_file_index += 1
-                                            st.session_state.current_step_index = 0
-                                            st.success("🎉 Файл обработан! Переход к следующему...")
-                                            st.rerun()
-                                        else:
-                                            st.balloons()
-                                            st.success("🎉 Все файлы обработаны! Задание завершено!")
-                            
-                            with col3:
-                                if st.button("⏭️ Следующий файл", use_container_width=True):
-                                    if current_file_index < len(guide['instructions']) - 1:
-                                        st.session_state.current_file_index += 1
-                                        st.session_state.current_step_index = 0
-                                        st.rerun()
-                                    else:
-                                        st.info("📝 Это последний файл")
-                            
-                            # Быстрая навигация
-                            st.markdown("#### Быстрая навигация:")
-                            nav_cols = st.columns(4)
-                            with nav_cols[0]:
-                                if st.button("🔄 Начать заново", use_container_width=True):
-                                    st.session_state.current_file_index = 0
-                                    st.session_state.current_step_index = 0
-                                    st.rerun()
-                            
-                            # Прогресс
-                            total_steps = sum(len(f['steps']) for f in guide['instructions'])
-                            completed_steps = sum(len(f['steps']) for f in guide['instructions'][:current_file_index]) + current_step_index
-                            progress = completed_steps / total_steps if total_steps > 0 else 0
-                            
-                            st.progress(progress)
-                            st.write(f"**Общий прогресс:** {completed_steps}/{total_steps} шагов ({progress:.1%})")
+                                        status_text.text("❌ Выполнение прервано")
+                                
+                                # Запуск в отдельном потоке
+                                thread = threading.Thread(target=run_automation)
+                                thread.daemon = True
+                                thread.start()
                         
-                        else:
-                            st.balloons()
-                            st.success("🎉 Все файлы обработаны! Задание завершено!")
+                        with col_stop:
+                            if st.button("⏹️ Остановить выполнение", type="secondary", use_container_width=True):
+                                st.session_state.executor.stop_execution()
+                                status_text.text("⏹️ Выполнение остановлено")
 
 if __name__ == "__main__":
     main()
