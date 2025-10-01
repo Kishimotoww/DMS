@@ -16,10 +16,24 @@ import pandas as pd
 
 # Настройка страницы
 st.set_page_config(
-    page_title="PDF Auto Learner + Executor", 
+    page_title="PDF Auto Learner + Web Executor", 
     page_icon="🎓",
     layout="wide"
 )
+
+# Веб-автоматизация через Selenium
+try:
+    from selenium import webdriver
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.support.ui import WebDriverWait
+    from selenium.webdriver.support import expected_conditions as EC
+    from selenium.webdriver.common.keys import Keys
+    from selenium.webdriver.chrome.options import Options
+    from webdriver_manager.chrome import ChromeDriverManager
+    WEB_AUTOMATION_AVAILABLE = True
+except ImportError:
+    WEB_AUTOMATION_AVAILABLE = False
+    st.warning("🌐 Для веб-автоматизации установите: pip install selenium webdriver-manager")
 
 # Автоматическая установка Tesseract
 @st.cache_resource
@@ -51,13 +65,14 @@ if 'tesseract_checked' not in st.session_state:
 tesseract_available = st.session_state.tesseract_available
 
 # Класс системы обучения и выполнения
-class ActionLearner:
+class WebActionLearner:
     def __init__(self):
         self.learning_mode = False
         self.recorded_actions = []
         self.current_scenario = None
         self.scenarios_file = "saved_scenarios.json"
         self.is_executing = False
+        self.driver = None
         self.load_scenarios()
     
     def load_scenarios(self):
@@ -80,17 +95,48 @@ class ActionLearner:
         except:
             return False
     
-    def start_learning(self, scenario_name):
+    def setup_driver(self):
+        """Настройка веб-драйвера"""
+        try:
+            chrome_options = Options()
+            chrome_options.add_argument("--headless")
+            chrome_options.add_argument("--no-sandbox")
+            chrome_options.add_argument("--disable-dev-shm-usage")
+            chrome_options.add_argument("--disable-gpu")
+            chrome_options.add_argument("--window-size=1920,1080")
+            
+            self.driver = webdriver.Chrome(ChromeDriverManager().install(), options=chrome_options)
+            return True
+        except Exception as e:
+            st.error(f"❌ Ошибка настройки веб-драйвера: {e}")
+            return False
+    
+    def start_learning(self, scenario_name, target_url):
         """Начало записи сценария"""
+        if not self.setup_driver():
+            return False
+            
         self.learning_mode = True
         self.recorded_actions = []
         self.current_scenario = scenario_name
+        
+        # Первое действие - переход на целевую страницу
+        self.recorded_actions.append({
+            'type': 'navigate',
+            'url': target_url,
+            'description': f"Переход на {target_url}"
+        })
+        
         st.session_state.learning_active = True
         return True
     
     def stop_learning(self):
         """Остановка записи сценария"""
         self.learning_mode = False
+        if self.driver:
+            self.driver.quit()
+            self.driver = None
+            
         if self.current_scenario and self.recorded_actions:
             self.scenarios[self.current_scenario] = {
                 'actions': self.recorded_actions.copy(),
@@ -99,6 +145,7 @@ class ActionLearner:
             }
             self.save_scenarios()
             st.success(f"✅ Сценарий '{self.current_scenario}' сохранен! Действий: {len(self.recorded_actions)}")
+        
         self.recorded_actions = []
         self.current_scenario = None
         st.session_state.learning_active = False
@@ -120,70 +167,79 @@ class ActionLearner:
         if scenario_name not in self.scenarios:
             return False, "Сценарий не найден"
         
-        try:
-            import pyautogui
-            import pyperclip
-        except ImportError:
-            return False, "Установите pyautogui и pyperclip для автоматизации"
+        if not self.setup_driver():
+            return False, "Ошибка настройки веб-драйвера"
         
         self.is_executing = True
         successful_actions = 0
         total_actions = len(self.scenarios[scenario_name]['actions'])
         
-        # Копируем номер в буфер обмена
-        pyperclip.copy(order_number)
-        
-        for i, action in enumerate(self.scenarios[scenario_name]['actions']):
-            if not self.is_executing:
-                break
-                
-            try:
+        try:
+            for i, action in enumerate(self.scenarios[scenario_name]['actions']):
+                if not self.is_executing:
+                    break
+                    
                 action_type = action['type']
+                description = action.get('description', f'Действие {i+1}')
                 
-                if action_type == 'click':
-                    pyautogui.click(action['x'], action['y'])
+                if progress_callback:
+                    progress_callback(i + 1, total_actions, description)
+                
+                if action_type == 'navigate':
+                    self.driver.get(action['url'])
+                    successful_actions += 1
+                    
+                elif action_type == 'click':
+                    element = WebDriverWait(self.driver, 10).until(
+                        EC.element_to_be_clickable((By.CSS_SELECTOR, action['selector']))
+                    )
+                    element.click()
                     successful_actions += 1
                     
                 elif action_type == 'type':
-                    # Заменяем {ORDER_NUMBER} на реальный номер
+                    element = WebDriverWait(self.driver, 10).until(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, action['selector']))
+                    )
+                    element.clear()
                     text = action['text'].replace('{ORDER_NUMBER}', order_number)
-                    pyautogui.write(text)
-                    successful_actions += 1
-                    
-                elif action_type == 'paste':
-                    pyautogui.hotkey('ctrl', 'v')
-                    successful_actions += 1
-                    
-                elif action_type == 'enter':
-                    pyautogui.press('enter')
+                    element.send_keys(text)
                     successful_actions += 1
                     
                 elif action_type == 'wait':
                     time.sleep(action['seconds'])
                     successful_actions += 1
                 
-                elif action_type == 'keypress':
-                    pyautogui.press(action['key'])
+                elif action_type == 'press_enter':
+                    element = WebDriverWait(self.driver, 10).until(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, action['selector']))
+                    )
+                    element.send_keys(Keys.ENTER)
                     successful_actions += 1
                 
-                # Обновляем прогресс
-                if progress_callback:
-                    progress_callback(i + 1, total_actions, f"Действие {i+1}/{total_actions}")
-                
                 # Задержка между действиями
-                time.sleep(0.5)
+                time.sleep(1)
                 
-            except Exception as e:
-                return False, f"Ошибка в действии {i+1}: {str(e)}"
-        
-        self.is_executing = False
-        return True, f"Успешно выполнено {successful_actions}/{total_actions} действий"
+            self.driver.quit()
+            self.driver = None
+            self.is_executing = False
+            
+            return True, f"Успешно выполнено {successful_actions}/{total_actions} действий"
+            
+        except Exception as e:
+            if self.driver:
+                self.driver.quit()
+                self.driver = None
+            self.is_executing = False
+            return False, f"Ошибка в действии {i+1}: {str(e)}"
     
     def stop_execution(self):
         """Остановка выполнения"""
         self.is_executing = False
+        if self.driver:
+            self.driver.quit()
+            self.driver = None
 
-# Класс обработки PDF
+# Класс обработки PDF (остается без изменений)
 class PDFProcessor:
     def __init__(self):
         self.temp_dir = tempfile.mkdtemp()
@@ -232,7 +288,6 @@ class PDFProcessor:
         """Обработка PDF и извлечение номеров"""
         start_time = time.time()
         
-        # Сохраняем временный файл
         temp_pdf_path = os.path.join(self.temp_dir, "input.pdf")
         with open(temp_pdf_path, 'wb') as f:
             f.write(pdf_file.getvalue())
@@ -253,11 +308,9 @@ class PDFProcessor:
             for page_num in range(total_pages):
                 page = doc[page_num]
                 
-                # Извлекаем текст
                 text = self.extract_text_comprehensive(page)
                 order_no = self.find_order_numbers(text)
                 
-                # OCR если не нашли
                 if not order_no and tesseract_available:
                     try:
                         pix = page.get_pixmap(matrix=fitz.Matrix(1.5, 1.5))
@@ -270,14 +323,12 @@ class PDFProcessor:
                     except:
                         pass
                 
-                # Создаем отдельный PDF
                 new_doc = fitz.open()
                 new_doc.insert_pdf(doc, from_page=page_num, to_page=page_num)
                 
                 filename = f"{order_no}.pdf" if order_no else f"page_{page_num + 1}.pdf"
                 output_path = os.path.join(results['output_dir'], filename)
                 
-                # Избегаем дубликатов
                 counter = 1
                 base_name = os.path.splitext(filename)[0]
                 while os.path.exists(output_path):
@@ -297,7 +348,6 @@ class PDFProcessor:
                 
                 results['files'].append(file_info)
                 
-                # Обновляем прогресс
                 progress = (page_num + 1) / total_pages
                 progress_bar.progress(progress)
                 
@@ -327,7 +377,7 @@ if 'processor' not in st.session_state:
     st.session_state.processor = PDFProcessor()
 
 if 'learner' not in st.session_state:
-    st.session_state.learner = ActionLearner()
+    st.session_state.learner = WebActionLearner()
 
 if 'processed_results' not in st.session_state:
     st.session_state.processed_results = None
@@ -359,31 +409,11 @@ st.markdown("""
         margin: 5px 0;
         border-left: 4px solid #28a745;
     }
-    .file-card-warning {
-        background-color: #fff3cd;
-        border-left: 4px solid #ffc107;
-    }
 </style>
 """, unsafe_allow_html=True)
 
 def main():
-    st.markdown('<div class="main-header">🎓 PDF Auto Learner + Executor</div>', unsafe_allow_html=True)
-    
-    # Проверка библиотек автоматизации
-    try:
-        import pyautogui
-        import pyperclip
-        automation_available = True
-    except ImportError:
-        automation_available = False
-        st.error("""
-        ❌ Библиотеки автоматизации не установлены!
-        
-        Для работы установите:
-        ```bash
-        pip install pyautogui pyperclip
-        ```
-        """)
+    st.markdown('<div class="main-header">🎓 PDF Auto Learner + Web Executor</div>', unsafe_allow_html=True)
     
     # Вкладки
     tab1, tab2, tab3 = st.tabs(["📄 Обработка PDF", "🎓 Обучение", "🚀 Автозапуск"])
@@ -422,54 +452,52 @@ def main():
                         col3.metric("Без номеров", len(files_without_numbers))
                         col4.metric("Время", f"{results['processing_time']:.1f}с")
                         
-                        # Показываем файлы для ручной проверки
+                        # Ручная проверка
                         st.markdown("---")
                         st.subheader("🔍 Ручная проверка номеров")
-                        st.info("Проверьте правильность распознанных номеров перед автозапуском")
                         
                         for file_info in results['files']:
                             if file_info['order_number']:
-                                col_a, col_b, col_c = st.columns([3, 1, 1])
+                                col_a, col_b = st.columns([3, 1])
                                 with col_a:
                                     st.markdown(f'<div class="file-card">', unsafe_allow_html=True)
                                     st.write(f"**{file_info['filename']}**")
                                     st.write(f"Страница: {file_info['page_number']}")
                                     st.markdown('</div>', unsafe_allow_html=True)
                                 with col_b:
-                                    st.text_input("Номер", value=file_info['order_number'], key=f"num_{file_info['filename']}", label_visibility="collapsed")
-                                with col_c:
-                                    if st.button("✅", key=f"ok_{file_info['filename']}"):
+                                    if st.button("✅ Подтвердить", key=f"confirm_{file_info['filename']}"):
                                         st.success(f"Подтвержден: {file_info['order_number']}")
     
     with tab2:
-        st.subheader("🎓 Обучение сценарию")
+        st.subheader("🎓 Обучение веб-сценарию")
         
-        if not automation_available:
-            st.warning("Установите библиотеки автоматизации для работы этого раздела")
+        if not WEB_AUTOMATION_AVAILABLE:
+            st.warning("Установите библиотеки веб-автоматизации для работы этого раздела")
         else:
             col_learn1, col_learn2 = st.columns(2)
             
             with col_learn1:
-                scenario_name = st.text_input("Название сценария", value="Мой_сценарий")
-                description = st.text_area("Описание сценария", placeholder="Что делает этот сценарий?")
+                scenario_name = st.text_input("Название сценария", value="Мой_веб_сценарий")
+                target_url = st.text_input("URL целевого сайта", value="https://example.com")
+                description = st.text_area("Описание сценария")
             
             with col_learn2:
                 st.info("""
                 **Инструкция по обучению:**
-                1. Введите название сценария
+                1. Введите название и URL сайта
                 2. Нажмите "Начать обучение"  
-                3. Перейдите на второй монитор в браузер
-                4. Выполните нужные действия
-                5. Вернитесь и нажмите "Завершить обучение"
+                3. Программа откроет сайт в фоновом режиме
+                4. Добавляйте действия через кнопки ниже
+                5. Завершите обучение когда закончите
                 """)
             
-            col_start, col_stop, col_info = st.columns([1, 1, 2])
+            col_start, col_stop = st.columns(2)
             
             with col_start:
-                if st.button("🎬 Начать обучение", type="primary", use_container_width=True) and scenario_name:
-                    if st.session_state.learner.start_learning(scenario_name):
+                if st.button("🎬 Начать обучение", type="primary", use_container_width=True) and scenario_name and target_url:
+                    if st.session_state.learner.start_learning(scenario_name, target_url):
                         st.session_state.learning_active = True
-                        st.success("🎥 Запись начата! Выполните действия в браузере...")
+                        st.success("🎥 Запись начата! Добавляйте действия ниже...")
             
             with col_stop:
                 if st.button("⏹️ Завершить обучение", type="secondary", use_container_width=True):
@@ -477,56 +505,59 @@ def main():
                     st.session_state.learning_active = False
             
             if st.session_state.learning_active:
-                st.markdown('<div class="learning-mode">🎥 ИДЕТ ЗАПИСЬ ДЕЙСТВИЙ... Выполняйте действия в браузере</div>', unsafe_allow_html=True)
+                st.markdown('<div class="learning-mode">🎥 ИДЕТ ЗАПИСЬ ДЕЙСТВИЙ...</div>', unsafe_allow_html=True)
                 
-                # Кнопки для записи действий
-                st.markdown("### Быстрые действия для записи:")
-                col_act1, col_act2, col_act3, col_act4 = st.columns(4)
+                # Форма для добавления действий
+                st.markdown("### Добавить действие:")
                 
-                with col_act1:
-                    if st.button("📋 Записать вставку", use_container_width=True):
-                        st.session_state.learner.add_action('paste', description="Вставка номера")
-                        st.success("✅ Записано: Вставка номера")
+                action_type = st.selectbox("Тип действия", 
+                                         ["click", "type", "wait", "press_enter"])
                 
-                with col_act2:
-                    if st.button("↵ Записать Enter", use_container_width=True):
-                        st.session_state.learner.add_action('enter', description="Нажатие Enter")
-                        st.success("✅ Записано: Нажатие Enter")
+                if action_type in ["click", "type", "press_enter"]:
+                    selector = st.text_input("CSS селектор", placeholder="#input-field, .button, input[name='order']")
+                    desc = st.text_input("Описание действия", placeholder="Клик в поле ввода")
                 
-                with col_act3:
-                    wait_seconds = st.number_input("Секунды ожидания", min_value=1, max_value=10, value=2)
-                    if st.button("⏱️ Записать ожидание", use_container_width=True):
-                        st.session_state.learner.add_action('wait', seconds=wait_seconds, description=f"Ожидание {wait_seconds}сек")
-                        st.success(f"✅ Записано: Ожидание {wait_seconds}сек")
+                if action_type == "type":
+                    text = st.text_input("Текст для ввода", value="{ORDER_NUMBER}")
                 
-                with col_act4:
-                    key_to_press = st.selectbox("Клавиша", ["tab", "space", "escape"])
-                    if st.button("⌨️ Записать клавишу", use_container_width=True):
-                        st.session_state.learner.add_action('keypress', key=key_to_press, description=f"Нажатие {key_to_press}")
-                        st.success(f"✅ Записано: Нажатие {key_to_press}")
+                if action_type == "wait":
+                    seconds = st.number_input("Секунды ожидания", min_value=1, max_value=10, value=2)
+                    desc = st.text_input("Описание действия", value=f"Ожидание {seconds} секунд")
+                
+                if st.button("➕ Добавить действие", type="primary"):
+                    if action_type in ["click", "type", "press_enter"] and not selector:
+                        st.error("Введите CSS селектор")
+                    else:
+                        action_params = {
+                            'click': {'selector': selector, 'description': desc},
+                            'type': {'selector': selector, 'text': text, 'description': desc},
+                            'wait': {'seconds': seconds, 'description': desc},
+                            'press_enter': {'selector': selector, 'description': desc}
+                        }
+                        
+                        if st.session_state.learner.add_action(action_type, **action_params[action_type]):
+                            st.success(f"✅ Добавлено: {desc}")
             
-            # Показать сохраненные сценарии
+            # Сохраненные сценарии
             if st.session_state.learner.scenarios:
                 st.markdown("---")
                 st.subheader("💾 Сохраненные сценарии")
                 
                 for name, scenario in st.session_state.learner.scenarios.items():
                     with st.expander(f"📁 {name} ({scenario['total_actions']} действий)"):
-                        st.write(f"Создан: {datetime.fromisoformat(scenario['created']).strftime('%d.%m.%Y %H:%M')}")
                         for i, action in enumerate(scenario['actions'], 1):
                             st.write(f"{i}. {action.get('description', 'Действие')}")
     
     with tab3:
-        st.subheader("🚀 Автоматический запуск")
+        st.subheader("🚀 Автоматический веб-запуск")
         
-        if not automation_available:
-            st.warning("Установите библиотеки автоматизации")
+        if not WEB_AUTOMATION_AVAILABLE:
+            st.warning("Установите библиотеки веб-автоматизации")
         elif not st.session_state.processed_results:
             st.info("📝 Сначала обработайте PDF файл во вкладке 'Обработка PDF'")
         elif not st.session_state.learner.scenarios:
             st.info("🎓 Сначала создайте сценарий во вкладке 'Обучение'")
         else:
-            # Выбор сценария
             scenario_names = list(st.session_state.learner.scenarios.keys())
             selected_scenario = st.selectbox("Выберите сценарий", scenario_names)
             
@@ -534,28 +565,21 @@ def main():
                 scenario = st.session_state.learner.scenarios[selected_scenario]
                 st.info(f"📋 Сценарий '{selected_scenario}': {scenario['total_actions']} действий")
                 
-                # Файлы для обработки
                 files_to_process = [f for f in st.session_state.processed_results['files'] if f['order_number']]
                 
                 if files_to_process:
                     st.success(f"✅ Готово к обработке: {len(files_to_process)} файлов")
                     
-                    # Предпросмотр файлов
                     with st.expander("📋 Файлы для обработки"):
                         for file_info in files_to_process:
                             st.write(f"• {file_info['filename']}")
                     
-                    # Запуск автоматизации
                     col_exec1, col_exec2 = st.columns([2, 1])
                     
                     with col_exec1:
-                        if st.button("🚀 ЗАПУСТИТЬ АВТОМАТИЗАЦИЮ", type="primary", use_container_width=True):
-                            st.warning("🔄 Автоматизация начнется через 5 секунд...")
-                            time.sleep(5)
-                            
+                        if st.button("🚀 ЗАПУСТИТЬ ВЕБ-АВТОМАТИЗАЦИЮ", type="primary", use_container_width=True):
                             progress_bar = st.progress(0)
                             status_text = st.empty()
-                            results_placeholder = st.empty()
                             
                             successful = 0
                             failed = 0
@@ -565,12 +589,14 @@ def main():
                                     break
                                 
                                 order_number = file_info['order_number']
-                                status_text.text(f"🤖 Обработка {i+1}/{len(files_to_process)}: {order_number}")
+                                
+                                def update_progress(current, total, message):
+                                    status_text.text(f"{message} - {order_number} ({current}/{total} действий)")
                                 
                                 success, message = st.session_state.learner.execute_scenario(
                                     selected_scenario, 
                                     order_number,
-                                    progress_callback=lambda curr, total, msg: status_text.text(f"{msg} - {order_number}")
+                                    progress_callback=update_progress
                                 )
                                 
                                 if success:
@@ -580,17 +606,15 @@ def main():
                                     failed += 1
                                     st.error(f"❌ {order_number} - {message}")
                                 
-                                # Обновляем прогресс
                                 progress = (i + 1) / len(files_to_process)
                                 progress_bar.progress(progress)
                                 
-                                # Пауза между файлами
                                 time.sleep(2)
                             
                             progress_bar.empty()
                             status_text.empty()
                             
-                            st.success(f"🎉 Автоматизация завершена! Успешно: {successful}, Ошибок: {failed}")
+                            st.success(f"🎉 Веб-автоматизация завершена! Успешно: {successful}, Ошибок: {failed}")
                     
                     with col_exec2:
                         if st.button("⏹️ ОСТАНОВИТЬ", type="secondary", use_container_width=True):
