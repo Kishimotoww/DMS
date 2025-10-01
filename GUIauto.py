@@ -298,7 +298,6 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 def main():
-    
     # Инициализация session_state переменных
     if 'confirmed_files' not in st.session_state:
         st.session_state.confirmed_files = []
@@ -308,8 +307,6 @@ def main():
         st.session_state.current_step_index = 0
         
     st.markdown('<div class="main-header">🎓 PDF Manual Assistant - No Installation Needed</div>', unsafe_allow_html=True)
-    st.markdown('<div class="main-header">🎓 PDF Manual Assistant - No Installation Needed</div>', unsafe_allow_html=True)
-    
     # Вкладки
     tab1, tab2, tab3 = st.tabs(["📄 Обработка PDF", "🎓 Создание процесса", "👨‍💻 Ручное выполнение"])
     
@@ -348,11 +345,13 @@ def main():
                         col4.metric("Время", f"{results['processing_time']:.1f}с")
                         
                         # Ручная проверка и редактирование
-                        st.markdown("---")
-                        st.subheader("✏️ Проверка и редактирование номеров")
-                        st.info("Проверьте и при необходимости исправьте номера перед созданием инструкций")
-                        
-                        if 'confirmed_files' not in st.session_state:
+                        # Ручная проверка и редактирование
+st.markdown("---")
+st.subheader("✏️ Проверка и редактирование номеров")
+st.info("Проверьте и при необходимости исправьте номера перед созданием инструкций")
+
+# Инициализируем confirmed_files в session_state если его нет
+if 'confirmed_files' not in st.session_state:
     st.session_state.confirmed_files = []
 
 confirmed_files = st.session_state.confirmed_files
@@ -364,6 +363,33 @@ for file_info in results['files']:
             st.write(f"**{file_info['filename']}**")
             st.write(f"Страница: {file_info['page_number']}")
         with col_b:
+            # Поле для редактирования номера
+            new_number = st.text_input(
+                "Номер заказа", 
+                value=file_info['order_number'], 
+                key=f"num_{file_info['filename']}",
+                label_visibility="visible"
+            )
+            file_info['order_number'] = new_number
+        with col_c:
+            # Проверяем, подтвержден ли уже этот файл
+            is_confirmed = any(f['filename'] == file_info['filename'] for f in confirmed_files)
+            
+            if is_confirmed:
+                st.success("✓")
+            else:
+                if st.button("✅ Подтвердить", key=f"ok_{file_info['filename']}"):
+                    confirmed_files.append(file_info)
+                    st.session_state.confirmed_files = confirmed_files
+                    st.rerun()
+
+if confirmed_files:
+    st.success(f"✅ Подтверждено файлов: {len(confirmed_files)}")
+    
+    # Кнопка для сброса подтвержденных файлов
+    if st.button("🔄 Сбросить подтвержденные файлы", type="secondary"):
+        st.session_state.confirmed_files = []
+        st.rerun()
             # Поле для редактирования номера
             new_number = st.text_input(
                 "Номер заказа", 
