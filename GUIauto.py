@@ -9,36 +9,21 @@ import os
 import zipfile
 import base64
 import time
-import subprocess
 import json
 from datetime import datetime
 import pandas as pd
 
 # Настройка страницы
 st.set_page_config(
-    page_title="PDF Auto Learner + Web Executor", 
+    page_title="PDF Auto Assistant - Manual Mode", 
     page_icon="🎓",
     layout="wide"
 )
 
-# Веб-автоматизация через Selenium
-try:
-    from selenium import webdriver
-    from selenium.webdriver.common.by import By
-    from selenium.webdriver.support.ui import WebDriverWait
-    from selenium.webdriver.support import expected_conditions as EC
-    from selenium.webdriver.common.keys import Keys
-    from selenium.webdriver.chrome.options import Options
-    from webdriver_manager.chrome import ChromeDriverManager
-    WEB_AUTOMATION_AVAILABLE = True
-except ImportError:
-    WEB_AUTOMATION_AVAILABLE = False
-    st.warning("🌐 Для веб-автоматизации установите: pip install selenium webdriver-manager")
-
 # Автоматическая установка Tesseract
-@st.cache_resource
 def setup_tesseract():
     try:
+        import subprocess
         result = subprocess.run(['which', 'tesseract'], capture_output=True, text=True)
         if result.returncode == 0:
             tesseract_path = result.stdout.strip()
@@ -64,182 +49,74 @@ if 'tesseract_checked' not in st.session_state:
 
 tesseract_available = st.session_state.tesseract_available
 
-# Класс системы обучения и выполнения
-class WebActionLearner:
+# Класс для ручного помощника
+class ManualAssistant:
     def __init__(self):
-        self.learning_mode = False
-        self.recorded_actions = []
-        self.current_scenario = None
-        self.scenarios_file = "saved_scenarios.json"
-        self.is_executing = False
-        self.driver = None
-        self.load_scenarios()
+        self.workflows_file = "workflows.json"
+        self.load_workflows()
     
-    def load_scenarios(self):
-        """Загрузка сохраненных сценариев"""
+    def load_workflows(self):
+        """Загрузка рабочих процессов"""
         try:
-            if os.path.exists(self.scenarios_file):
-                with open(self.scenarios_file, 'r', encoding='utf-8') as f:
-                    self.scenarios = json.load(f)
+            if os.path.exists(self.workflows_file):
+                with open(self.workflows_file, 'r', encoding='utf-8') as f:
+                    self.workflows = json.load(f)
             else:
-                self.scenarios = {}
+                self.workflows = {}
         except:
-            self.scenarios = {}
+            self.workflows = {}
     
-    def save_scenarios(self):
-        """Сохранение сценариев"""
+    def save_workflows(self):
+        """Сохранение рабочих процессов"""
         try:
-            with open(self.scenarios_file, 'w', encoding='utf-8') as f:
-                json.dump(self.scenarios, f, ensure_ascii=False, indent=2)
+            with open(self.workflows_file, 'w', encoding='utf-8') as f:
+                json.dump(self.workflows, f, ensure_ascii=False, indent=2)
             return True
         except:
             return False
     
-    def setup_driver(self):
-        """Настройка веб-драйвера"""
-        try:
-            chrome_options = Options()
-            chrome_options.add_argument("--headless")
-            chrome_options.add_argument("--no-sandbox")
-            chrome_options.add_argument("--disable-dev-shm-usage")
-            chrome_options.add_argument("--disable-gpu")
-            chrome_options.add_argument("--window-size=1920,1080")
-            
-            self.driver = webdriver.Chrome(ChromeDriverManager().install(), options=chrome_options)
-            return True
-        except Exception as e:
-            st.error(f"❌ Ошибка настройки веб-драйвера: {e}")
-            return False
-    
-    def start_learning(self, scenario_name, target_url):
-        """Начало записи сценария"""
-        if not self.setup_driver():
-            return False
-            
-        self.learning_mode = True
-        self.recorded_actions = []
-        self.current_scenario = scenario_name
-        
-        # Первое действие - переход на целевую страницу
-        self.recorded_actions.append({
-            'type': 'navigate',
-            'url': target_url,
-            'description': f"Переход на {target_url}"
-        })
-        
-        st.session_state.learning_active = True
+    def create_workflow(self, workflow_name, steps):
+        """Создание рабочего процесса"""
+        self.workflows[workflow_name] = {
+            'steps': steps,
+            'created': datetime.now().isoformat(),
+            'total_steps': len(steps)
+        }
+        self.save_workflows()
         return True
     
-    def stop_learning(self):
-        """Остановка записи сценария"""
-        self.learning_mode = False
-        if self.driver:
-            self.driver.quit()
-            self.driver = None
-            
-        if self.current_scenario and self.recorded_actions:
-            self.scenarios[self.current_scenario] = {
-                'actions': self.recorded_actions.copy(),
-                'created': datetime.now().isoformat(),
-                'total_actions': len(self.recorded_actions)
+    def generate_manual_guide(self, workflow_name, order_numbers):
+        """Генерация руководства для ручного выполнения"""
+        if workflow_name not in self.workflows:
+            return None
+        
+        guide = {
+            'workflow_name': workflow_name,
+            'total_files': len(order_numbers),
+            'completion_time': len(order_numbers) * 2,  # примерное время в минутах
+            'instructions': [],
+            'generated_at': datetime.now().isoformat()
+        }
+        
+        for i, order_number in enumerate(order_numbers):
+            file_guide = {
+                'file_number': i + 1,
+                'order_number': order_number,
+                'steps': []
             }
-            self.save_scenarios()
-            st.success(f"✅ Сценарий '{self.current_scenario}' сохранен! Действий: {len(self.recorded_actions)}")
-        
-        self.recorded_actions = []
-        self.current_scenario = None
-        st.session_state.learning_active = False
-    
-    def add_action(self, action_type, **params):
-        """Добавление действия в сценарий"""
-        if self.learning_mode:
-            action = {
-                'type': action_type,
-                'timestamp': time.time(),
-                **params
-            }
-            self.recorded_actions.append(action)
-            return True
-        return False
-    
-    def execute_scenario(self, scenario_name, order_number, progress_callback=None):
-        """Выполнение сценария для одного номера"""
-        if scenario_name not in self.scenarios:
-            return False, "Сценарий не найден"
-        
-        if not self.setup_driver():
-            return False, "Ошибка настройки веб-драйвера"
-        
-        self.is_executing = True
-        successful_actions = 0
-        total_actions = len(self.scenarios[scenario_name]['actions'])
-        
-        try:
-            for i, action in enumerate(self.scenarios[scenario_name]['actions']):
-                if not self.is_executing:
-                    break
-                    
-                action_type = action['type']
-                description = action.get('description', f'Действие {i+1}')
-                
-                if progress_callback:
-                    progress_callback(i + 1, total_actions, description)
-                
-                if action_type == 'navigate':
-                    self.driver.get(action['url'])
-                    successful_actions += 1
-                    
-                elif action_type == 'click':
-                    element = WebDriverWait(self.driver, 10).until(
-                        EC.element_to_be_clickable((By.CSS_SELECTOR, action['selector']))
-                    )
-                    element.click()
-                    successful_actions += 1
-                    
-                elif action_type == 'type':
-                    element = WebDriverWait(self.driver, 10).until(
-                        EC.presence_of_element_located((By.CSS_SELECTOR, action['selector']))
-                    )
-                    element.clear()
-                    text = action['text'].replace('{ORDER_NUMBER}', order_number)
-                    element.send_keys(text)
-                    successful_actions += 1
-                    
-                elif action_type == 'wait':
-                    time.sleep(action['seconds'])
-                    successful_actions += 1
-                
-                elif action_type == 'press_enter':
-                    element = WebDriverWait(self.driver, 10).until(
-                        EC.presence_of_element_located((By.CSS_SELECTOR, action['selector']))
-                    )
-                    element.send_keys(Keys.ENTER)
-                    successful_actions += 1
-                
-                # Задержка между действиями
-                time.sleep(1)
-                
-            self.driver.quit()
-            self.driver = None
-            self.is_executing = False
             
-            return True, f"Успешно выполнено {successful_actions}/{total_actions} действий"
+            for step in self.workflows[workflow_name]['steps']:
+                step_copy = step.copy()
+                # Заменяем плейсхолдер на реальный номер
+                if 'text_to_type' in step_copy:
+                    step_copy['text_to_type'] = step_copy['text_to_type'].replace('{ORDER_NUMBER}', order_number)
+                file_guide['steps'].append(step_copy)
             
-        except Exception as e:
-            if self.driver:
-                self.driver.quit()
-                self.driver = None
-            self.is_executing = False
-            return False, f"Ошибка в действии {i+1}: {str(e)}"
-    
-    def stop_execution(self):
-        """Остановка выполнения"""
-        self.is_executing = False
-        if self.driver:
-            self.driver.quit()
-            self.driver = None
+            guide['instructions'].append(file_guide)
+        
+        return guide
 
-# Класс обработки PDF (остается без изменений)
+# Класс обработки PDF
 class PDFProcessor:
     def __init__(self):
         self.temp_dir = tempfile.mkdtemp()
@@ -376,14 +253,11 @@ class PDFProcessor:
 if 'processor' not in st.session_state:
     st.session_state.processor = PDFProcessor()
 
-if 'learner' not in st.session_state:
-    st.session_state.learner = WebActionLearner()
+if 'assistant' not in st.session_state:
+    st.session_state.assistant = ManualAssistant()
 
 if 'processed_results' not in st.session_state:
     st.session_state.processed_results = None
-
-if 'learning_active' not in st.session_state:
-    st.session_state.learning_active = False
 
 # CSS стили
 st.markdown("""
@@ -394,29 +268,40 @@ st.markdown("""
         text-align: center;
         margin-bottom: 2rem;
     }
-    .learning-mode {
-        background: linear-gradient(45deg, #FF6B6B, #4ECDC4);
-        color: white;
-        padding: 15px;
+    .guide-box {
+        background-color: #f0f8ff;
+        padding: 20px;
         border-radius: 10px;
-        text-align: center;
-        font-weight: bold;
+        border-left: 5px solid #4ECDC4;
+        margin: 10px 0;
     }
-    .file-card {
-        background-color: #f8f9fa;
-        padding: 10px;
+    .step-box {
+        background-color: #fff;
+        padding: 15px;
+        margin: 10px 0;
         border-radius: 8px;
-        margin: 5px 0;
-        border-left: 4px solid #28a745;
+        border-left: 4px solid #667eea;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .current-step {
+        background-color: #fff3cd;
+        border-left: 4px solid #ffc107;
+    }
+    .file-header {
+        background-color: #e8f4fd;
+        padding: 15px;
+        border-radius: 8px;
+        margin: 15px 0;
+        font-weight: bold;
     }
 </style>
 """, unsafe_allow_html=True)
 
 def main():
-    st.markdown('<div class="main-header">🎓 PDF Auto Learner + Web Executor</div>', unsafe_allow_html=True)
+    st.markdown('<div class="main-header">🎓 PDF Manual Assistant - No Installation Needed</div>', unsafe_allow_html=True)
     
     # Вкладки
-    tab1, tab2, tab3 = st.tabs(["📄 Обработка PDF", "🎓 Обучение", "🚀 Автозапуск"])
+    tab1, tab2, tab3 = st.tabs(["📄 Обработка PDF", "🎓 Создание процесса", "👨‍💻 Ручное выполнение"])
     
     with tab1:
         st.subheader("Обработка PDF и извлечение номеров")
@@ -452,174 +337,258 @@ def main():
                         col3.metric("Без номеров", len(files_without_numbers))
                         col4.metric("Время", f"{results['processing_time']:.1f}с")
                         
-                        # Ручная проверка
+                        # Ручная проверка и редактирование
                         st.markdown("---")
-                        st.subheader("🔍 Ручная проверка номеров")
+                        st.subheader("✏️ Проверка и редактирование номеров")
+                        st.info("Проверьте и при необходимости исправьте номера перед созданием инструкций")
                         
+                        confirmed_files = []
                         for file_info in results['files']:
                             if file_info['order_number']:
-                                col_a, col_b = st.columns([3, 1])
+                                col_a, col_b, col_c = st.columns([2, 2, 1])
                                 with col_a:
-                                    st.markdown(f'<div class="file-card">', unsafe_allow_html=True)
                                     st.write(f"**{file_info['filename']}**")
                                     st.write(f"Страница: {file_info['page_number']}")
-                                    st.markdown('</div>', unsafe_allow_html=True)
                                 with col_b:
-                                    if st.button("✅ Подтвердить", key=f"confirm_{file_info['filename']}"):
-                                        st.success(f"Подтвержден: {file_info['order_number']}")
+                                    # Поле для редактирования номера
+                                    new_number = st.text_input(
+                                        "Номер заказа", 
+                                        value=file_info['order_number'], 
+                                        key=f"num_{file_info['filename']}",
+                                        label_visibility="visible"
+                                    )
+                                    file_info['order_number'] = new_number
+                                with col_c:
+                                    if st.button("✅ Подтвердить", key=f"ok_{file_info['filename']}"):
+                                        confirmed_files.append(file_info)
+                                        st.success("✓")
+                        
+                        st.session_state.confirmed_files = confirmed_files
+                        
+                        if confirmed_files:
+                            st.success(f"✅ Подтверждено файлов: {len(confirmed_files)}")
     
     with tab2:
-        st.subheader("🎓 Обучение веб-сценарию")
+        st.subheader("🎓 Создание процесса обработки")
         
-        if not WEB_AUTOMATION_AVAILABLE:
-            st.warning("Установите библиотеки веб-автоматизации для работы этого раздела")
-        else:
-            col_learn1, col_learn2 = st.columns(2)
+        st.info("""
+        **Создайте пошаговый процесс для ручного выполнения.**
+        Программа сгенерирует подробные инструкции для каждого файла.
+        """)
+        
+        workflow_name = st.text_input("Название процесса", value="Обработка_заказов_RDS")
+        
+        st.markdown("### Добавление шагов процесса:")
+        
+        # Форма для добавления шагов
+        step_type = st.selectbox("Тип шага", 
+                               ["click", "type", "wait", "hotkey", "focus", "select", "button"])
+        
+        step_description = st.text_input("Описание шага", placeholder="Что нужно сделать на этом шаге?")
+        
+        step_params = {}
+        if step_type == "click":
+            step_params['action'] = "Кликнуть"
+            step_params['location'] = st.text_input("Где кликнуть?", placeholder="В поле ввода номера заказа")
+        
+        elif step_type == "type":
+            step_params['action'] = "Ввести текст"
+            text_to_type = st.text_input("Текст для ввода", value="{ORDER_NUMBER}")
+            step_params['text_to_type'] = text_to_type
+            step_params['location'] = st.text_input("Куда вводить?", placeholder="В поле поиска")
+        
+        elif step_type == "wait":
+            step_params['action'] = "Подождать"
+            seconds = st.number_input("Секунды", min_value=1, value=2)
+            step_params['duration'] = f"{seconds} секунд"
+        
+        elif step_type == "hotkey":
+            step_params['action'] = "Нажать комбинацию клавиш"
+            step_params['keys'] = st.text_input("Клавиши", value="Ctrl+V", placeholder="Ctrl+V, Enter, Tab...")
+        
+        elif step_type == "focus":
+            step_params['action'] = "Перейти в поле"
+            step_params['location'] = st.text_input("Какое поле?", placeholder="Поле ввода номера заказа")
+        
+        elif step_type == "select":
+            step_params['action'] = "Выбрать из списка"
+            step_params['location'] = st.text_input("Какой список?", placeholder="Выпадающий список статуса")
+        
+        elif step_type == "button":
+            step_params['action'] = "Нажать кнопку"
+            step_params['location'] = st.text_input("Какую кнопку?", placeholder="Кнопка 'Поиск', 'Сохранить'")
+        
+        # Превью шагов
+        if 'workflow_steps' not in st.session_state:
+            st.session_state.workflow_steps = []
+        
+        if st.button("➕ Добавить шаг", type="primary") and step_description:
+            step = {
+                'type': step_type,
+                'description': step_description,
+                **step_params
+            }
+            st.session_state.workflow_steps.append(step)
+            st.success(f"✅ Добавлен шаг: {step_description}")
+        
+        # Показать текущие шаги
+        if st.session_state.workflow_steps:
+            st.markdown("### Текущий процесс:")
+            for i, step in enumerate(st.session_state.workflow_steps, 1):
+                st.markdown(f'<div class="step-box">', unsafe_allow_html=True)
+                st.write(f"**Шаг {i}: {step['description']}**")
+                st.write(f"**Действие:** {step['action']}")
+                if 'location' in step:
+                    st.write(f"**Место:** {step['location']}")
+                if 'text_to_type' in step:
+                    st.write(f"**Текст:** `{step['text_to_type']}`")
+                if 'duration' in step:
+                    st.write(f"**Время:** {step['duration']}")
+                if 'keys' in step:
+                    st.write(f"**Клавиши:** {step['keys']}")
+                st.markdown('</div>', unsafe_allow_html=True)
             
-            with col_learn1:
-                scenario_name = st.text_input("Название сценария", value="Мой_веб_сценарий")
-                target_url = st.text_input("URL целевого сайта", value="https://example.com")
-                description = st.text_area("Описание сценария")
-            
-            with col_learn2:
-                st.info("""
-                **Инструкция по обучению:**
-                1. Введите название и URL сайта
-                2. Нажмите "Начать обучение"  
-                3. Программа откроет сайт в фоновом режиме
-                4. Добавляйте действия через кнопки ниже
-                5. Завершите обучение когда закончите
-                """)
-            
-            col_start, col_stop = st.columns(2)
-            
-            with col_start:
-                if st.button("🎬 Начать обучение", type="primary", use_container_width=True) and scenario_name and target_url:
-                    if st.session_state.learner.start_learning(scenario_name, target_url):
-                        st.session_state.learning_active = True
-                        st.success("🎥 Запись начата! Добавляйте действия ниже...")
-            
-            with col_stop:
-                if st.button("⏹️ Завершить обучение", type="secondary", use_container_width=True):
-                    st.session_state.learner.stop_learning()
-                    st.session_state.learning_active = False
-            
-            if st.session_state.learning_active:
-                st.markdown('<div class="learning-mode">🎥 ИДЕТ ЗАПИСЬ ДЕЙСТВИЙ...</div>', unsafe_allow_html=True)
-                
-                # Форма для добавления действий
-                st.markdown("### Добавить действие:")
-                
-                action_type = st.selectbox("Тип действия", 
-                                         ["click", "type", "wait", "press_enter"])
-                
-                if action_type in ["click", "type", "press_enter"]:
-                    selector = st.text_input("CSS селектор", placeholder="#input-field, .button, input[name='order']")
-                    desc = st.text_input("Описание действия", placeholder="Клик в поле ввода")
-                
-                if action_type == "type":
-                    text = st.text_input("Текст для ввода", value="{ORDER_NUMBER}")
-                
-                if action_type == "wait":
-                    seconds = st.number_input("Секунды ожидания", min_value=1, max_value=10, value=2)
-                    desc = st.text_input("Описание действия", value=f"Ожидание {seconds} секунд")
-                
-                if st.button("➕ Добавить действие", type="primary"):
-                    if action_type in ["click", "type", "press_enter"] and not selector:
-                        st.error("Введите CSS селектор")
-                    else:
-                        action_params = {
-                            'click': {'selector': selector, 'description': desc},
-                            'type': {'selector': selector, 'text': text, 'description': desc},
-                            'wait': {'seconds': seconds, 'description': desc},
-                            'press_enter': {'selector': selector, 'description': desc}
-                        }
-                        
-                        if st.session_state.learner.add_action(action_type, **action_params[action_type]):
-                            st.success(f"✅ Добавлено: {desc}")
-            
-            # Сохраненные сценарии
-            if st.session_state.learner.scenarios:
-                st.markdown("---")
-                st.subheader("💾 Сохраненные сценарии")
-                
-                for name, scenario in st.session_state.learner.scenarios.items():
-                    with st.expander(f"📁 {name} ({scenario['total_actions']} действий)"):
-                        for i, action in enumerate(scenario['actions'], 1):
-                            st.write(f"{i}. {action.get('description', 'Действие')}")
+            col_save, col_clear = st.columns(2)
+            with col_save:
+                if st.button("💾 Сохранить процесс", type="secondary", use_container_width=True):
+                    if st.session_state.assistant.create_workflow(workflow_name, st.session_state.workflow_steps):
+                        st.success(f"✅ Процесс '{workflow_name}' сохранен!")
+            with col_clear:
+                if st.button("🗑️ Очистить шаги", type="secondary", use_container_width=True):
+                    st.session_state.workflow_steps = []
+                    st.rerun()
     
     with tab3:
-        st.subheader("🚀 Автоматический веб-запуск")
+        st.subheader("👨‍💻 Ручное выполнение с инструкциями")
         
-        if not WEB_AUTOMATION_AVAILABLE:
-            st.warning("Установите библиотеки веб-автоматизации")
-        elif not st.session_state.processed_results:
+        if not st.session_state.processed_results:
             st.info("📝 Сначала обработайте PDF файл во вкладке 'Обработка PDF'")
-        elif not st.session_state.learner.scenarios:
-            st.info("🎓 Сначала создайте сценарий во вкладке 'Обучение'")
+        elif not st.session_state.assistant.workflows:
+            st.info("🎓 Сначала создайте процесс во вкладке 'Создание процесса'")
         else:
-            scenario_names = list(st.session_state.learner.scenarios.keys())
-            selected_scenario = st.selectbox("Выберите сценарий", scenario_names)
+            workflow_names = list(st.session_state.assistant.workflows.keys())
+            selected_workflow = st.selectbox("Выберите процесс", workflow_names)
             
-            if selected_scenario:
-                scenario = st.session_state.learner.scenarios[selected_scenario]
-                st.info(f"📋 Сценарий '{selected_scenario}': {scenario['total_actions']} действий")
-                
-                files_to_process = [f for f in st.session_state.processed_results['files'] if f['order_number']]
-                
-                if files_to_process:
-                    st.success(f"✅ Готово к обработке: {len(files_to_process)} файлов")
+            if selected_workflow:
+                # Получаем подтвержденные файлы
+                confirmed_files = st.session_state.get('confirmed_files', [])
+                if not confirmed_files:
+                    st.warning("⚠️ Подтвердите номера во вкладке 'Обработка PDF'")
+                else:
+                    order_numbers = [f['order_number'] for f in confirmed_files]
                     
-                    with st.expander("📋 Файлы для обработки"):
-                        for file_info in files_to_process:
-                            st.write(f"• {file_info['filename']}")
+                    # Генерация руководства
+                    guide = st.session_state.assistant.generate_manual_guide(
+                        selected_workflow, order_numbers
+                    )
                     
-                    col_exec1, col_exec2 = st.columns([2, 1])
-                    
-                    with col_exec1:
-                        if st.button("🚀 ЗАПУСТИТЬ ВЕБ-АВТОМАТИЗАЦИЮ", type="primary", use_container_width=True):
-                            progress_bar = st.progress(0)
-                            status_text = st.empty()
+                    if guide:
+                        st.markdown(f'<div class="guide-box">', unsafe_allow_html=True)
+                        st.subheader("📋 Руководство по выполнению")
+                        st.write(f"**Процесс:** {guide['workflow_name']}")
+                        st.write(f"**Файлов для обработки:** {guide['total_files']}")
+                        st.write(f"**Примерное время:** {guide['completion_time']} минут")
+                        st.write(f"**Сгенерировано:** {datetime.fromisoformat(guide['generated_at']).strftime('%d.%m.%Y %H:%M')}")
+                        st.markdown('</div>', unsafe_allow_html=True)
+                        
+                        # Инструкции для каждого файла
+                        st.markdown("### Пошаговые инструкции:")
+                        
+                        # Сессия для отслеживания прогресса
+                        if 'current_file_index' not in st.session_state:
+                            st.session_state.current_file_index = 0
+                        if 'current_step_index' not in st.session_state:
+                            st.session_state.current_step_index = 0
+                        
+                        current_file_index = st.session_state.current_file_index
+                        current_step_index = st.session_state.current_step_index
+                        
+                        if current_file_index < len(guide['instructions']):
+                            current_file = guide['instructions'][current_file_index]
                             
-                            successful = 0
-                            failed = 0
+                            st.markdown(f'<div class="file-header">', unsafe_allow_html=True)
+                            st.subheader(f"📄 Файл {current_file['file_number']} из {len(guide['instructions'])}")
+                            st.write(f"**Номер заказа:** {current_file['order_number']}")
+                            st.markdown('</div>', unsafe_allow_html=True)
                             
-                            for i, file_info in enumerate(files_to_process):
-                                if not st.session_state.learner.is_executing:
-                                    break
+                            # Показываем шаги для текущего файла
+                            for i, step in enumerate(current_file['steps']):
+                                step_class = "current-step" if i == current_step_index else "step-box"
+                                st.markdown(f'<div class="{step_class}">', unsafe_allow_html=True)
                                 
-                                order_number = file_info['order_number']
+                                # Номер шага и статус
+                                status = "🟢 ТЕКУЩИЙ ШАГ" if i == current_step_index else "⚪"
+                                st.write(f"**{status} Шаг {i+1}: {step['description']}**")
                                 
-                                def update_progress(current, total, message):
-                                    status_text.text(f"{message} - {order_number} ({current}/{total} действий)")
+                                # Детали шага
+                                st.write(f"**Действие:** {step['action']}")
+                                if 'location' in step:
+                                    st.write(f"**Место:** {step['location']}")
+                                if 'text_to_type' in step and 'text_to_type' in step:
+                                    display_text = step['text_to_type'].replace('{ORDER_NUMBER}', current_file['order_number'])
+                                    st.write(f"**Текст:** `{display_text}`")
+                                if 'duration' in step:
+                                    st.write(f"**Время:** {step['duration']}")
+                                if 'keys' in step:
+                                    st.write(f"**Клавиши:** {step['keys']}")
                                 
-                                success, message = st.session_state.learner.execute_scenario(
-                                    selected_scenario, 
-                                    order_number,
-                                    progress_callback=update_progress
-                                )
-                                
-                                if success:
-                                    successful += 1
-                                    st.success(f"✅ {order_number} - {message}")
-                                else:
-                                    failed += 1
-                                    st.error(f"❌ {order_number} - {message}")
-                                
-                                progress = (i + 1) / len(files_to_process)
-                                progress_bar.progress(progress)
-                                
-                                time.sleep(2)
+                                st.markdown('</div>', unsafe_allow_html=True)
                             
-                            progress_bar.empty()
-                            status_text.empty()
+                            # Управление прогрессом
+                            st.markdown("### Управление выполнением:")
+                            col1, col2, col3 = st.columns(3)
                             
-                            st.success(f"🎉 Веб-автоматизация завершена! Успешно: {successful}, Ошибок: {failed}")
-                    
-                    with col_exec2:
-                        if st.button("⏹️ ОСТАНОВИТЬ", type="secondary", use_container_width=True):
-                            st.session_state.learner.stop_execution()
-                            st.warning("Автоматизация остановлена")
+                            with col1:
+                                if st.button("⏮️ Предыдущий шаг", use_container_width=True) and current_step_index > 0:
+                                    st.session_state.current_step_index -= 1
+                                    st.rerun()
+                            
+                            with col2:
+                                if st.button("✅ Шаг выполнен", type="primary", use_container_width=True):
+                                    if current_step_index < len(current_file['steps']) - 1:
+                                        st.session_state.current_step_index += 1
+                                        st.success("✓ Шаг выполнен!")
+                                        st.rerun()
+                                    else:
+                                        # Переход к следующему файлу
+                                        if current_file_index < len(guide['instructions']) - 1:
+                                            st.session_state.current_file_index += 1
+                                            st.session_state.current_step_index = 0
+                                            st.success("🎉 Файл обработан! Переход к следующему...")
+                                            st.rerun()
+                                        else:
+                                            st.balloons()
+                                            st.success("🎉 Все файлы обработаны! Задание завершено!")
+                            
+                            with col3:
+                                if st.button("⏭️ Следующий файл", use_container_width=True):
+                                    if current_file_index < len(guide['instructions']) - 1:
+                                        st.session_state.current_file_index += 1
+                                        st.session_state.current_step_index = 0
+                                        st.rerun()
+                                    else:
+                                        st.info("📝 Это последний файл")
+                            
+                            # Быстрая навигация
+                            st.markdown("#### Быстрая навигация:")
+                            nav_cols = st.columns(4)
+                            with nav_cols[0]:
+                                if st.button("🔄 Начать заново", use_container_width=True):
+                                    st.session_state.current_file_index = 0
+                                    st.session_state.current_step_index = 0
+                                    st.rerun()
+                            
+                            # Прогресс
+                            total_steps = sum(len(f['steps']) for f in guide['instructions'])
+                            completed_steps = sum(len(f['steps']) for f in guide['instructions'][:current_file_index]) + current_step_index
+                            progress = completed_steps / total_steps if total_steps > 0 else 0
+                            
+                            st.progress(progress)
+                            st.write(f"**Общий прогресс:** {completed_steps}/{total_steps} шагов ({progress:.1%})")
+                        
+                        else:
+                            st.balloons()
+                            st.success("🎉 Все файлы обработаны! Задание завершено!")
 
 if __name__ == "__main__":
     main()
