@@ -310,81 +310,105 @@ def main():
     # Вкладки
     tab1, tab2, tab3 = st.tabs(["📄 Обработка PDF", "🎓 Создание процесса", "👨‍💻 Ручное выполнение"])
     
-    with tab1:
-        st.subheader("Обработка PDF и извлечение номеров")
+with tab1:
+    st.subheader("Обработка PDF и извлечение номеров")
+    
+    uploaded_file = st.file_uploader("Загрузите PDF файл", type="pdf")
+    
+    if uploaded_file is not None:
+        st.success(f"✅ Файл загружен: {uploaded_file.name}")
         
-        uploaded_file = st.file_uploader("Загрузите PDF файл", type="pdf")
-        
-        if uploaded_file is not None:
-            st.success(f"✅ Файл загружен: {uploaded_file.name}")
+        if st.button("🔄 Начать обработку PDF", type="primary", use_container_width=True):
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            results_placeholder = st.empty()
             
-            if st.button("🔄 Начать обработку PDF", type="primary", use_container_width=True):
-                progress_bar = st.progress(0)
-                status_text = st.empty()
-                results_placeholder = st.empty()
-                
-                with st.spinner("Обработка PDF..."):
-                    results = st.session_state.processor.process_pdf(
-                        uploaded_file, progress_bar, status_text
-                    )
-                
-                if results:
-                    st.session_state.processed_results = results
-                    
-                    with results_placeholder.container():
-                        st.markdown("---")
-                        st.subheader("📊 Результаты обработки")
+            with st.spinner("Обработка PDF..."):
+                results = st.session_state.processor.process_pdf(
+                    uploaded_file, progress_bar, status_text
+                )
+            
+            if results:
+                st.session_state.processed_results = results
+                # Сбрасываем подтвержденные файлы при новой обработке
+                st.session_state.confirmed_files = []
+                st.rerun()
+    
+    # Показываем результаты обработки если они есть
+    if st.session_state.processed_results:
+        results = st.session_state.processed_results
+        
+        with st.container():
+            st.markdown("---")
+            st.subheader("📊 Результаты обработки")
+            
+            files_with_numbers = [f for f in results['files'] if f['order_number']]
+            files_without_numbers = [f for f in results['files'] if not f['order_number']]
+            
+            col1, col2, col3, col4 = st.columns(4)
+            col1.metric("Всего страниц", results['total_pages'])
+            col2.metric("С номерами", len(files_with_numbers))
+            col3.metric("Без номеров", len(files_without_numbers))
+            col4.metric("Время", f"{results['processing_time']:.1f}с")
+            
+            # Ручная проверка и редактирование
+            st.markdown("---")
+            st.subheader("✏️ Проверка и редактирование номеров")
+            st.info("Проверьте и при необходимости исправьте номера перед созданием инструкций")
+            
+            # Используем session_state для хранения отредактированных номеров
+            if 'edited_files' not in st.session_state:
+                st.session_state.edited_files = results['files'].copy()
+            
+            confirmed_files = st.session_state.get('confirmed_files', [])
+            
+            for i, file_info in enumerate(st.session_state.edited_files):
+                if file_info['order_number']:  # Показываем только файлы с номерами
+                    col_a, col_b, col_c = st.columns([2, 2, 1])
+                    with col_a:
+                        st.write(f"**{file_info['filename']}**")
+                        st.write(f"Страница: {file_info['page_number']}")
+                    with col_b:
+                        # Поле для редактирования номера
+                        new_number = st.text_input(
+                            "Номер заказа", 
+                            value=file_info['order_number'], 
+                            key=f"num_{file_info['filename']}",
+                            label_visibility="visible"
+                        )
+                        # Обновляем номер в отредактированных файлах
+                        st.session_state.edited_files[i]['order_number'] = new_number
+                    with col_c:
+                        # Проверяем, подтвержден ли уже этот файл
+                        is_confirmed = any(f['filename'] == file_info['filename'] for f in confirmed_files)
                         
-                        files_with_numbers = [f for f in results['files'] if f['order_number']]
-                        files_without_numbers = [f for f in results['files'] if not f['order_number']]
-                        
-                        col1, col2, col3, col4 = st.columns(4)
-                        col1.metric("Всего страниц", results['total_pages'])
-                        col2.metric("С номерами", len(files_with_numbers))
-                        col3.metric("Без номеров", len(files_without_numbers))
-                        col4.metric("Время", f"{results['processing_time']:.1f}с")
-                        
-                        # Ручная проверка и редактирование
-                        st.markdown("---")
-                        st.subheader("✏️ Проверка и редактирование номеров")
-                        st.info("Проверьте и при необходимости исправьте номера перед созданием инструкций")
-                        
-                        confirmed_files = st.session_state.confirmed_files
-                        
-                        for file_info in results['files']:
-                            if file_info['order_number']:
-                                col_a, col_b, col_c = st.columns([2, 2, 1])
-                                with col_a:
-                                    st.write(f"**{file_info['filename']}**")
-                                    st.write(f"Страница: {file_info['page_number']}")
-                                with col_b:
-                                    # Поле для редактирования номера
-                                    new_number = st.text_input(
-                                        "Номер заказа", 
-                                        value=file_info['order_number'], 
-                                        key=f"num_{file_info['filename']}",
-                                        label_visibility="visible"
-                                    )
-                                    file_info['order_number'] = new_number
-                                with col_c:
-                                    # Проверяем, подтвержден ли уже этот файл
-                                    is_confirmed = any(f['filename'] == file_info['filename'] for f in confirmed_files)
-                                    
-                                    if is_confirmed:
-                                        st.success("✓")
-                                    else:
-                                        if st.button("✅ Подтвердить", key=f"ok_{file_info['filename']}"):
-                                            confirmed_files.append(file_info)
-                                            st.session_state.confirmed_files = confirmed_files
-                                            st.rerun()
-                        
-                        if confirmed_files:
-                            st.success(f"✅ Подтверждено файлов: {len(confirmed_files)}")
-                            
-                            # Кнопка для сброса подтвержденных файлов
-                            if st.button("🔄 Сбросить подтвержденные файлы", type="secondary"):
-                                st.session_state.confirmed_files = []
+                        if is_confirmed:
+                            st.success("✓")
+                        else:
+                            if st.button("✅ Подтвердить", key=f"ok_{file_info['filename']}"):
+                                # Добавляем текущую версию файла (с возможными правками) в подтвержденные
+                                confirmed_files.append(st.session_state.edited_files[i])
+                                st.session_state.confirmed_files = confirmed_files
                                 st.rerun()
+            
+            # Показываем статистику по подтвержденным файлам
+            if confirmed_files:
+                st.success(f"✅ Подтверждено файлов: {len(confirmed_files)}")
+                
+                # Показываем список подтвержденных файлов
+                with st.expander("📋 Показать подтвержденные файлы"):
+                    for cf in confirmed_files:
+                        st.write(f"- {cf['filename']}: {cf['order_number']}")
+                
+                # Кнопки управления
+                col_reset, col_refresh = st.columns(2)
+                with col_reset:
+                    if st.button("🔄 Сбросить все подтверждения", type="secondary"):
+                        st.session_state.confirmed_files = []
+                        st.rerun()
+                with col_refresh:
+                    if st.button("🔄 Обновить список", type="secondary"):
+                        st.rerun()
     
     with tab2:
         st.subheader("🎓 Создание процесса обработки")
