@@ -93,7 +93,7 @@ class ManualAssistant:
         guide = {
             'workflow_name': workflow_name,
             'total_files': len(order_numbers),
-            'completion_time': len(order_numbers) * 2,  # примерное время в минутах
+            'completion_time': len(order_numbers) * 2,
             'instructions': [],
             'generated_at': datetime.now().isoformat()
         }
@@ -107,7 +107,6 @@ class ManualAssistant:
             
             for step in self.workflows[workflow_name]['steps']:
                 step_copy = step.copy()
-                # Заменяем плейсхолдер на реальный номер
                 if 'text_to_type' in step_copy:
                     step_copy['text_to_type'] = step_copy['text_to_type'].replace('{ORDER_NUMBER}', order_number)
                 file_guide['steps'].append(step_copy)
@@ -307,6 +306,7 @@ def main():
         st.session_state.current_step_index = 0
         
     st.markdown('<div class="main-header">🎓 PDF Manual Assistant - No Installation Needed</div>', unsafe_allow_html=True)
+    
     # Вкладки
     tab1, tab2, tab3 = st.tabs(["📄 Обработка PDF", "🎓 Создание процесса", "👨‍💻 Ручное выполнение"])
     
@@ -345,79 +345,19 @@ def main():
                         col4.metric("Время", f"{results['processing_time']:.1f}с")
                         
                         # Ручная проверка и редактирование
-                        # Ручная проверка и редактирование
-st.markdown("---")
-st.subheader("✏️ Проверка и редактирование номеров")
-st.info("Проверьте и при необходимости исправьте номера перед созданием инструкций")
-
-# Инициализируем confirmed_files в session_state если его нет
-if 'confirmed_files' not in st.session_state:
-    st.session_state.confirmed_files = []
-
-confirmed_files = st.session_state.confirmed_files
-
-for file_info in results['files']:
-    if file_info['order_number']:
-        col_a, col_b, col_c = st.columns([2, 2, 1])
-        with col_a:
-            st.write(f"**{file_info['filename']}**")
-            st.write(f"Страница: {file_info['page_number']}")
-        with col_b:
-            # Поле для редактирования номера
-            new_number = st.text_input(
-                "Номер заказа", 
-                value=file_info['order_number'], 
-                key=f"num_{file_info['filename']}",
-                label_visibility="visible"
-            )
-            file_info['order_number'] = new_number
-        with col_c:
-            # Проверяем, подтвержден ли уже этот файл
-            is_confirmed = any(f['filename'] == file_info['filename'] for f in confirmed_files)
-            
-            if is_confirmed:
-                st.success("✓")
-            else:
-                if st.button("✅ Подтвердить", key=f"ok_{file_info['filename']}"):
-                    confirmed_files.append(file_info)
-                    st.session_state.confirmed_files = confirmed_files
-                    st.rerun()
-
-for file_info in results['files']:
-    if file_info['order_number']:
-        col_a, col_b, col_c = st.columns([2, 2, 1])
-        with col_a:
-            st.write(f"**{file_info['filename']}**")
-            st.write(f"Страница: {file_info['page_number']}")
-        with col_b:
-            # Поле для редактирования номера
-            new_number = st.text_input(
-                "Номер заказа", 
-                value=file_info['order_number'], 
-                key=f"num_{file_info['filename']}",
-                label_visibility="visible"
-            )
-            file_info['order_number'] = new_number
-        with col_c:
-            # Проверяем, подтвержден ли уже этот файл
-            is_confirmed = any(f['filename'] == file_info['filename'] for f in confirmed_files)
-            
-            if is_confirmed:
-                st.success("✓")
-            else:
-                if st.button("✅ Подтвердить", key=f"ok_{file_info['filename']}"):
-                    confirmed_files.append(file_info)
-                    st.session_state.confirmed_files = confirmed_files
-                    st.rerun()
-
-# ЭТО ДОЛЖНО БЫТЬ ПОСЛЕ ЦИКЛА for, А НЕ ВНУТРИ НЕГО!
-if confirmed_files:
-    st.success(f"✅ Подтверждено файлов: {len(confirmed_files)}")
-    
-    # Кнопка для сброса подтвержденных файлов
-    if st.button("🔄 Сбросить подтвержденные файлы", type="secondary"):
-        st.session_state.confirmed_files = []
-        st.rerun()
+                        st.markdown("---")
+                        st.subheader("✏️ Проверка и редактирование номеров")
+                        st.info("Проверьте и при необходимости исправьте номера перед созданием инструкций")
+                        
+                        confirmed_files = st.session_state.confirmed_files
+                        
+                        for file_info in results['files']:
+                            if file_info['order_number']:
+                                col_a, col_b, col_c = st.columns([2, 2, 1])
+                                with col_a:
+                                    st.write(f"**{file_info['filename']}**")
+                                    st.write(f"Страница: {file_info['page_number']}")
+                                with col_b:
                                     # Поле для редактирования номера
                                     new_number = st.text_input(
                                         "Номер заказа", 
@@ -427,14 +367,24 @@ if confirmed_files:
                                     )
                                     file_info['order_number'] = new_number
                                 with col_c:
-                                    if st.button("✅ Подтвердить", key=f"ok_{file_info['filename']}"):
-                                        confirmed_files.append(file_info)
+                                    # Проверяем, подтвержден ли уже этот файл
+                                    is_confirmed = any(f['filename'] == file_info['filename'] for f in confirmed_files)
+                                    
+                                    if is_confirmed:
                                         st.success("✓")
-                        
-                        st.session_state.confirmed_files = confirmed_files
+                                    else:
+                                        if st.button("✅ Подтвердить", key=f"ok_{file_info['filename']}"):
+                                            confirmed_files.append(file_info)
+                                            st.session_state.confirmed_files = confirmed_files
+                                            st.rerun()
                         
                         if confirmed_files:
                             st.success(f"✅ Подтверждено файлов: {len(confirmed_files)}")
+                            
+                            # Кнопка для сброса подтвержденных файлов
+                            if st.button("🔄 Сбросить подтвержденные файлы", type="secondary"):
+                                st.session_state.confirmed_files = []
+                                st.rerun()
     
     with tab2:
         st.subheader("🎓 Создание процесса обработки")
@@ -539,13 +489,13 @@ if confirmed_files:
             
             if selected_workflow:
                 # Получаем подтвержденные файлы
-                        confirmed_files = st.session_state.get('confirmed_files', [])
+                confirmed_files = st.session_state.get('confirmed_files', [])
                 if not confirmed_files:
-                        st.warning("⚠️ Подтвердите номера во вкладке 'Обработка PDF'. Перейдите в эту вкладку, проверьте номера и нажмите кнопки '✅ Подтвердить'")
-                if st.button("🔄 Проверить снова", key="check_again"):
+                    st.warning("⚠️ Подтвердите номера во вкладке 'Обработка PDF'. Перейдите в эту вкладку, проверьте номера и нажмите кнопки '✅ Подтвердить'")
+                    if st.button("🔄 Проверить снова", key="check_again"):
                         st.rerun()
                 else:
-                        order_numbers = [f['order_number'] for f in confirmed_files]
+                    order_numbers = [f['order_number'] for f in confirmed_files]
                     
                     # Генерация руководства
                     guide = st.session_state.assistant.generate_manual_guide(
@@ -563,12 +513,6 @@ if confirmed_files:
                         
                         # Инструкции для каждого файла
                         st.markdown("### Пошаговые инструкции:")
-                        
-                        # Сессия для отслеживания прогресса
-                        if 'current_file_index' not in st.session_state:
-                            st.session_state.current_file_index = 0
-                        if 'current_step_index' not in st.session_state:
-                            st.session_state.current_step_index = 0
                         
                         current_file_index = st.session_state.current_file_index
                         current_step_index = st.session_state.current_step_index
