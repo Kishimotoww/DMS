@@ -18,8 +18,20 @@ try:
     import pyperclip
     GUI_AUTOMATION_AVAILABLE = True
 except ImportError:
-    GUI_AUTOMATION_AVAILABLE = False
-    st.warning("⚠️ Библиотеки для автоматизации GUI не установлены. Установите: pip install pyautogui pyperclip")
+    import subprocess
+    import sys
+    st.warning("🔄 Установка библиотек для автоматизации GUI...")
+    
+    # Устанавливаем pyautogui и pyperclip
+    try:
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "pyautogui", "pyperclip"])
+        import pyautogui
+        import pyperclip
+        GUI_AUTOMATION_AVAILABLE = True
+        st.success("✅ Библиотеки для автоматизации установлены!")
+    except:
+        GUI_AUTOMATION_AVAILABLE = False
+        st.error("❌ Не удалось установить библиотеки автоматизации")
 
 # Настройка страницы
 st.set_page_config(
