@@ -298,6 +298,16 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 def main():
+    
+    # Инициализация session_state переменных
+    if 'confirmed_files' not in st.session_state:
+        st.session_state.confirmed_files = []
+    if 'current_file_index' not in st.session_state:
+        st.session_state.current_file_index = 0
+    if 'current_step_index' not in st.session_state:
+        st.session_state.current_step_index = 0
+        
+    st.markdown('<div class="main-header">🎓 PDF Manual Assistant - No Installation Needed</div>', unsafe_allow_html=True)
     st.markdown('<div class="main-header">🎓 PDF Manual Assistant - No Installation Needed</div>', unsafe_allow_html=True)
     
     # Вкладки
@@ -503,11 +513,13 @@ for file_info in results['files']:
             
             if selected_workflow:
                 # Получаем подтвержденные файлы
-                confirmed_files = st.session_state.get('confirmed_files', [])
+                        confirmed_files = st.session_state.get('confirmed_files', [])
                 if not confirmed_files:
-                    st.warning("⚠️ Подтвердите номера во вкладке 'Обработка PDF'")
+                        st.warning("⚠️ Подтвердите номера во вкладке 'Обработка PDF'. Перейдите в эту вкладку, проверьте номера и нажмите кнопки '✅ Подтвердить'")
+                if st.button("🔄 Проверить снова", key="check_again"):
+                        st.rerun()
                 else:
-                    order_numbers = [f['order_number'] for f in confirmed_files]
+                        order_numbers = [f['order_number'] for f in confirmed_files]
                     
                     # Генерация руководства
                     guide = st.session_state.assistant.generate_manual_guide(
