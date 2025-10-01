@@ -418,15 +418,6 @@ if confirmed_files:
     if st.button("🔄 Сбросить подтвержденные файлы", type="secondary"):
         st.session_state.confirmed_files = []
         st.rerun()
-
-                        if confirmed_files:
-                        st.success(f"✅ Подтверждено файлов: {len(confirmed_files)}")
-    
-    # Кнопка для сброса подтвержденных файлов
-                            if st.button("🔄 Сбросить подтвержденные файлы", type="secondary"):
-                            st.session_state.confirmed_files = []
-                            st.rerun()
-
                                     # Поле для редактирования номера
                                     new_number = st.text_input(
                                         "Номер заказа", 
